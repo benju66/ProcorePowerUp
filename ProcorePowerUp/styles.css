@@ -119,6 +119,24 @@
     line-height: 1.5;
 }
 
+.empty-state.warning {
+    color: #856404;
+    background-color: #fff3cd;
+    border: 1px solid #ffeeba;
+    border-radius: 5px;
+    margin: 10px;
+}
+
+/* --- Footer --- */
+.pp-footer {
+    padding: 10px;
+    background: #f8f9fa;
+    border-top: 1px solid #eee;
+    font-size: 11px;
+    color: #888;
+    text-align: center;
+}
+
 /* --- Details / Summary (The Tree) --- */
 details {
     margin-bottom: 5px;
