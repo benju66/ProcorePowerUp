@@ -1,6 +1,6 @@
-// injected.js - The Network Wiretap (Aggressive Mode)
+// injected.js - The Network Wiretap (Strict Whitelist)
 (function() {
-    console.log("Procore Power-Up: Wiretap installed. Waiting for traffic...");
+    console.log("Procore Power-Up: Wiretap installed. Waiting for drawing traffic...");
 
     function getIds() {
         const url = window.location.href;
@@ -24,9 +24,29 @@
         }, '*');
     }
 
-    // Capture ALL Procore API traffic to ensure we catch the metadata
+    // STRICT WHITELIST: Only allow Drawing-related or Metadata URLs
     function isRelevantUrl(url) {
-        return url && url.includes('procore.com') && !url.includes('.js') && !url.includes('.css');
+        if (!url || !url.includes('procore.com')) return false;
+        
+        // Exclude static assets
+        if (url.includes('.js') || url.includes('.css') || url.includes('.png')) return false;
+
+        // 1. Explicitly allow Drawing Endpoints
+        if (url.includes('drawing_log') || 
+            url.includes('drawing_revisions') || 
+            url.includes('drawing_areas') ||
+            url.includes('/drawings')) {
+            return true;
+        }
+
+        // 2. Explicitly allow Metadata/Discipline Endpoints (The "Decoder Ring")
+        if (url.includes('groups') || 
+            url.includes('discipline') ||
+            url.includes('configurable_field_sets')) {
+            return true;
+        }
+
+        return false;
     }
 
     // 1. Intercept XHR

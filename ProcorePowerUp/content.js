@@ -1,4 +1,4 @@
-// content.js - Fix: Forced Sort Order & Debug
+// content.js - Fix: Right Side, Resizable, Draggable
 
 // --- 1. INJECT WIRETAP ---
 const script = document.createElement('script');
@@ -26,7 +26,6 @@ const PP_Store = {
     async saveDisciplineMap(projectId, mapData) {
         if (!projectId) return;
         const key = `pp_map_${projectId}`;
-        // We overwrite the map completely to ensure sort order is fresh
         return new Promise((resolve) => {
             chrome.storage.local.set({ [key]: mapData }, () => resolve(mapData));
         });
@@ -44,6 +43,23 @@ const PP_Store = {
                 });
             });
         });
+    },
+
+    // --- NEW: User Preferences (Position & Size) ---
+    async getPreferences() {
+        return new Promise((resolve) => {
+            chrome.storage.local.get(['pp_prefs'], (result) => {
+                resolve(result.pp_prefs || { sidebarWidth: 300, buttonTop: '50%' });
+            });
+        });
+    },
+
+    async savePreferences(prefs) {
+        chrome.storage.local.get(['pp_prefs'], (result) => {
+            const current = result.pp_prefs || {};
+            const updated = { ...current, ...prefs };
+            chrome.storage.local.set({ pp_prefs: updated });
+        });
     }
 };
 
@@ -53,19 +69,38 @@ const PP_Store = {
 const PP_UI = {
     isOpen: false,
 
-    init() {
+    async init() {
         if (document.getElementById('pp-toggle-btn')) return;
         
+        // Load Prefs
+        const prefs = await PP_Store.getPreferences();
+
+        // 1. Create Toggle Button
         const toggleBtn = document.createElement('div');
         toggleBtn.id = 'pp-toggle-btn';
         toggleBtn.innerHTML = '📂'; 
-        toggleBtn.onclick = () => PP_Core.toggleSidebar();
+        // Apply saved position
+        if (prefs.buttonTop) toggleBtn.style.top = prefs.buttonTop;
+        
+        // Handle Button Drag
+        this.makeDraggable(toggleBtn);
+        
+        toggleBtn.onclick = (e) => {
+            // Prevent click if dragging occurred
+            if (toggleBtn.getAttribute('data-dragged') === 'true') return;
+            PP_Core.toggleSidebar();
+        };
         document.body.appendChild(toggleBtn);
 
+        // 2. Create Sidebar
         const sidebar = document.createElement('div');
         sidebar.id = 'pp-sidebar';
+        
+        // Apply saved width
+        if (prefs.sidebarWidth) sidebar.style.width = `${prefs.sidebarWidth}px`;
+
         sidebar.innerHTML = `
-            <div class="pp-header">
+            <div id="pp-resizer"></div> <div class="pp-header">
                 <h3>Project Drawings</h3>
                 <span class="close-btn" id="pp-close">&times;</span>
             </div>
@@ -80,9 +115,91 @@ const PP_UI = {
         `;
         document.body.appendChild(sidebar);
 
+        // Handle Resizing
+        this.makeResizable(document.getElementById('pp-resizer'), sidebar);
+
         document.getElementById('pp-close').onclick = () => PP_Core.toggleSidebar();
-        document.getElementById('pp-search').addEventListener('keyup', PP_UI.filterTree);
+        document.getElementById('pp-search').addEventListener('input', PP_UI.filterTree);
         document.getElementById('pp-load-all').addEventListener('click', PP_Core.triggerLoadAll);
+    },
+
+    // --- DRAGGABLE BUTTON LOGIC ---
+    makeDraggable(element) {
+        let isDragging = false;
+        let startY;
+        let startTop;
+
+        element.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            startY = e.clientY;
+            startTop = element.offsetTop;
+            element.setAttribute('data-dragged', 'false');
+            
+            // Disable transition during drag
+            element.style.transition = 'none';
+            e.preventDefault();
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            const deltaY = e.clientY - startY;
+            
+            // Mark as dragged if moved more than a few pixels
+            if (Math.abs(deltaY) > 3) element.setAttribute('data-dragged', 'true');
+            
+            element.style.top = `${startTop + deltaY}px`;
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (isDragging) {
+                isDragging = false;
+                element.style.transition = ''; // Restore transition
+                
+                // Save new position
+                PP_Store.savePreferences({ buttonTop: element.style.top });
+            }
+        });
+    },
+
+    // --- RESIZABLE SIDEBAR LOGIC ---
+    makeResizable(resizer, sidebar) {
+        let isResizing = false;
+        let startX, startWidth;
+
+        resizer.addEventListener('mousedown', (e) => {
+            isResizing = true;
+            startX = e.clientX;
+            startWidth = parseInt(window.getComputedStyle(sidebar).width, 10);
+            
+            resizer.classList.add('resizing');
+            document.body.style.cursor = 'ew-resize'; // Force cursor
+            e.preventDefault();
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (!isResizing) return;
+            
+            // Calculate new width (Moving Left INCREASES width because sidebar is on Right)
+            const deltaX = startX - e.clientX; 
+            const newWidth = startWidth + deltaX;
+
+            if (newWidth > 200 && newWidth < 800) { // Limits
+                sidebar.style.width = `${newWidth}px`;
+            }
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (isResizing) {
+                isResizing = false;
+                resizer.classList.remove('resizing');
+                document.body.style.cursor = '';
+                
+                // Save width
+                PP_Store.savePreferences({ 
+                    sidebarWidth: parseInt(sidebar.style.width, 10) 
+                });
+            }
+        });
     },
 
     toggle(openState) {
@@ -124,14 +241,13 @@ const PP_UI = {
             const title = dwg.title || "No Title";
             const id = dwg.id;
             
-            // --- DISCIPLINE LOGIC ---
             let discName = "General";
             let sortIndex = 9999; 
 
             if (dwg.discipline && dwg.discipline.id) {
                 const mapEntry = discMap[dwg.discipline.id];
                 if (mapEntry) {
-                    discName = mapEntry.name || mapEntry; // Handle both Object and String formats
+                    discName = mapEntry.name || mapEntry;
                     sortIndex = mapEntry.index !== undefined ? mapEntry.index : 9999;
                 }
             } else if (dwg.discipline_name) {
@@ -145,7 +261,6 @@ const PP_UI = {
             groups[discName].items.push({ num, title, id, raw: dwg });
         });
 
-        // --- SORT LOGIC ---
         disciplineKeys.sort((a, b) => {
             const orderA = groups[a].order;
             const orderB = groups[b].order;
@@ -209,12 +324,38 @@ const PP_UI = {
     },
 
     filterTree() {
-        const term = document.getElementById('pp-search').value.toLowerCase();
-        document.querySelectorAll('.drawing-row').forEach(row => {
-            const text = row.innerText.toLowerCase();
-            const show = text.includes(term);
-            row.style.display = show ? 'block' : 'none';
-            if (show) row.closest('details').open = true;
+        const term = document.getElementById('pp-search').value.toLowerCase().trim();
+        const sections = document.querySelectorAll('#pp-tree-content details');
+
+        if (!term) {
+            sections.forEach(section => {
+                section.style.display = ''; 
+                section.open = false;
+                section.querySelectorAll('.drawing-row').forEach(row => row.style.display = '');
+            });
+            return;
+        }
+
+        sections.forEach(section => {
+            let hasMatch = false;
+            const rows = section.querySelectorAll('.drawing-row');
+
+            rows.forEach(row => {
+                const text = row.innerText.toLowerCase();
+                if (text.includes(term)) {
+                    row.style.display = ''; 
+                    hasMatch = true;
+                } else {
+                    row.style.display = 'none'; 
+                }
+            });
+
+            if (hasMatch) {
+                section.style.display = '';
+                section.open = true; 
+            } else {
+                section.style.display = 'none'; 
+            }
         });
     }
 };
@@ -260,23 +401,17 @@ const PP_Core = {
         const activeProjectId = PP_Core.getIdsFromUrl().projectId || ids.projectId;
         if (!activeProjectId) return;
 
-        // --- MAP DISCOVERY ---
         const newMap = {};
         PP_Core.findDisciplinesRecursive(rawData, newMap, 0);
         
         if (Object.keys(newMap).length > 0) {
-            // Log what we found to the console for debugging
-            console.log("Procore Power-Up: 🎯 CAPTURED MAP:", newMap);
-            
             this.currentMap = { ...this.currentMap, ...newMap };
             await PP_Store.saveDisciplineMap(activeProjectId, this.currentMap);
-            
             PP_Store.getProjectData(activeProjectId).then(res => {
                  if (res.data) PP_UI.renderState('DATA', { ...res.data, map: this.currentMap, projectId: activeProjectId });
             });
         }
 
-        // --- DRAWING DISCOVERY ---
         const foundDrawings = PP_Core.findDrawingsInObject(rawData);
         if (foundDrawings.length > 0) {
             const currentCache = await PP_Store.getProjectData(activeProjectId);
@@ -303,20 +438,17 @@ const PP_Core = {
     findDisciplinesRecursive(obj, map, sortCounter) {
         if (!obj || typeof obj !== 'object') return;
         
-        // Strict Check: Must have ID and Name, but NOT be a drawing
         if (obj.id && obj.name && typeof obj.name === 'string' && !obj.drawing_number && !obj.number && !obj.title) {
             map[obj.id] = { name: obj.name, index: sortCounter };
         }
 
         if (Array.isArray(obj)) {
             obj.forEach((item, index) => {
-                // IMPORTANT: We use the array index as the sort counter
                 PP_Core.findDisciplinesRecursive(item, map, index); 
             });
         } else {
             for (const key in obj) {
                 if (Object.prototype.hasOwnProperty.call(obj, key)) {
-                    // If it's an object, we can't trust the order, so we pass the existing counter
                     PP_Core.findDisciplinesRecursive(obj[key], map, sortCounter);
                 }
             }
