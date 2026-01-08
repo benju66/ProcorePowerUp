@@ -1,10 +1,4 @@
-// content.js - Fix: Right Side, Resizable, Draggable
-
-// --- 1. INJECT WIRETAP ---
-const script = document.createElement('script');
-script.src = chrome.runtime.getURL('injected.js');
-script.onload = function() { this.remove(); };
-(document.head || document.documentElement).appendChild(script);
+// content.js - Procore Power-Up: AG Grid Target & Hard Reset Expand
 
 // ==========================================
 // MODULE: STORE
@@ -13,11 +7,20 @@ const PP_Store = {
     async saveProjectData(projectId, drawings, companyId, areaId) {
         if (!projectId) return;
         const key = `pp_cache_${projectId}`;
+        
+        const leanDrawings = drawings.map(d => ({
+            id: d.id,
+            num: d.number || d.drawing_number || d.num,
+            title: d.title,
+            discipline: d.discipline,
+            discipline_name: d.discipline_name
+        }));
+
         const payload = {
             timestamp: Date.now(),
             companyId,
             drawingAreaId: areaId,
-            drawings: drawings
+            drawings: leanDrawings
         };
         chrome.storage.local.set({ [key]: payload });
         return payload;
@@ -45,7 +48,6 @@ const PP_Store = {
         });
     },
 
-    // --- NEW: User Preferences (Position & Size) ---
     async getPreferences() {
         return new Promise((resolve) => {
             chrome.storage.local.get(['pp_prefs'], (result) => {
@@ -72,21 +74,17 @@ const PP_UI = {
     async init() {
         if (document.getElementById('pp-toggle-btn')) return;
         
-        // Load Prefs
         const prefs = await PP_Store.getPreferences();
 
         // 1. Create Toggle Button
         const toggleBtn = document.createElement('div');
         toggleBtn.id = 'pp-toggle-btn';
-        toggleBtn.innerHTML = '📂'; 
-        // Apply saved position
+        toggleBtn.textContent = '📂'; 
         if (prefs.buttonTop) toggleBtn.style.top = prefs.buttonTop;
         
-        // Handle Button Drag
         this.makeDraggable(toggleBtn);
         
         toggleBtn.onclick = (e) => {
-            // Prevent click if dragging occurred
             if (toggleBtn.getAttribute('data-dragged') === 'true') return;
             PP_Core.toggleSidebar();
         };
@@ -96,13 +94,13 @@ const PP_UI = {
         const sidebar = document.createElement('div');
         sidebar.id = 'pp-sidebar';
         
-        // Apply saved width
         if (prefs.sidebarWidth) sidebar.style.width = `${prefs.sidebarWidth}px`;
 
         sidebar.innerHTML = `
-            <div id="pp-resizer"></div> <div class="pp-header">
+            <div id="pp-resizer"></div> 
+            <div class="pp-header">
                 <h3>Project Drawings</h3>
-                <span class="close-btn" id="pp-close">&times;</span>
+                <span class="pp-close-btn" id="pp-close">&times;</span>
             </div>
             <div class="pp-controls">
                 <button id="pp-load-all" class="pp-btn-primary">🔄 Load All Data</button>
@@ -115,7 +113,6 @@ const PP_UI = {
         `;
         document.body.appendChild(sidebar);
 
-        // Handle Resizing
         this.makeResizable(document.getElementById('pp-resizer'), sidebar);
 
         document.getElementById('pp-close').onclick = () => PP_Core.toggleSidebar();
@@ -123,19 +120,23 @@ const PP_UI = {
         document.getElementById('pp-load-all').addEventListener('click', PP_Core.triggerLoadAll);
     },
 
-    // --- DRAGGABLE BUTTON LOGIC ---
+    updateLoadButton(text, disabled) {
+        const btn = document.getElementById('pp-load-all');
+        if (btn) {
+            btn.innerText = text;
+            btn.disabled = disabled;
+        }
+    },
+
     makeDraggable(element) {
         let isDragging = false;
-        let startY;
-        let startTop;
+        let startY, startTop;
 
         element.addEventListener('mousedown', (e) => {
             isDragging = true;
             startY = e.clientY;
             startTop = element.offsetTop;
             element.setAttribute('data-dragged', 'false');
-            
-            // Disable transition during drag
             element.style.transition = 'none';
             e.preventDefault();
         });
@@ -143,25 +144,19 @@ const PP_UI = {
         window.addEventListener('mousemove', (e) => {
             if (!isDragging) return;
             const deltaY = e.clientY - startY;
-            
-            // Mark as dragged if moved more than a few pixels
             if (Math.abs(deltaY) > 3) element.setAttribute('data-dragged', 'true');
-            
             element.style.top = `${startTop + deltaY}px`;
         });
 
         window.addEventListener('mouseup', () => {
             if (isDragging) {
                 isDragging = false;
-                element.style.transition = ''; // Restore transition
-                
-                // Save new position
+                element.style.transition = ''; 
                 PP_Store.savePreferences({ buttonTop: element.style.top });
             }
         });
     },
 
-    // --- RESIZABLE SIDEBAR LOGIC ---
     makeResizable(resizer, sidebar) {
         let isResizing = false;
         let startX, startWidth;
@@ -170,20 +165,16 @@ const PP_UI = {
             isResizing = true;
             startX = e.clientX;
             startWidth = parseInt(window.getComputedStyle(sidebar).width, 10);
-            
             resizer.classList.add('resizing');
-            document.body.style.cursor = 'ew-resize'; // Force cursor
+            document.body.style.cursor = 'ew-resize';
             e.preventDefault();
         });
 
         window.addEventListener('mousemove', (e) => {
             if (!isResizing) return;
-            
-            // Calculate new width (Moving Left INCREASES width because sidebar is on Right)
             const deltaX = startX - e.clientX; 
             const newWidth = startWidth + deltaX;
-
-            if (newWidth > 200 && newWidth < 800) { // Limits
+            if (newWidth > 200 && newWidth < 800) {
                 sidebar.style.width = `${newWidth}px`;
             }
         });
@@ -193,11 +184,7 @@ const PP_UI = {
                 isResizing = false;
                 resizer.classList.remove('resizing');
                 document.body.style.cursor = '';
-                
-                // Save width
-                PP_Store.savePreferences({ 
-                    sidebarWidth: parseInt(sidebar.style.width, 10) 
-                });
+                PP_Store.savePreferences({ sidebarWidth: parseInt(sidebar.style.width, 10) });
             }
         });
     },
@@ -212,9 +199,9 @@ const PP_UI = {
         const footer = document.getElementById('pp-footer');
         
         if (stateType === 'LOADING') {
-            treeRoot.innerHTML = `<div class="empty-state"><p>Loading...</p></div>`;
+            treeRoot.innerHTML = `<div class="pp-empty-state"><p>Loading...</p></div>`;
         } else if (stateType === 'EMPTY') {
-            treeRoot.innerHTML = `<div class="empty-state"><p><strong>No drawings found.</strong></p><p>Please <b>Refresh the Page</b> to capture discipline names, then click "Load All Data".</p></div>`;
+            treeRoot.innerHTML = `<div class="pp-empty-state"><p><strong>No drawings found.</strong></p><p>Please <b>Refresh the Page</b> to capture discipline names, then click "Load All Data".</p></div>`;
             footer.innerText = "";
         } else if (stateType === 'DATA') {
             PP_UI.buildTree(payload.drawings, payload.map, payload.projectId, payload.drawingAreaId);
@@ -227,9 +214,10 @@ const PP_UI = {
         const treeRoot = document.getElementById('pp-tree-content');
         treeRoot.innerHTML = ''; 
 
-        const validDrawings = drawings.filter(d => d.number || d.drawing_number);
+        const validDrawings = drawings.filter(d => d.number || d.drawing_number || d.num);
+        
         if (validDrawings.length === 0) {
-            treeRoot.innerHTML = '<div class="empty-state"><p>No valid drawings found.</p></div>';
+            treeRoot.innerHTML = '<div class="pp-empty-state"><p>No valid drawings found.</p></div>';
             return;
         }
 
@@ -237,7 +225,7 @@ const PP_UI = {
         const disciplineKeys = []; 
 
         validDrawings.forEach(dwg => {
-            const num = dwg.number || dwg.drawing_number;
+            const num = dwg.number || dwg.drawing_number || dwg.num;
             const title = dwg.title || "No Title";
             const id = dwg.id;
             
@@ -258,7 +246,7 @@ const PP_UI = {
                 groups[discName] = { items: [], order: sortIndex };
                 disciplineKeys.push(discName);
             }
-            groups[discName].items.push({ num, title, id, raw: dwg });
+            groups[discName].items.push({ num, title, id });
         });
 
         disciplineKeys.sort((a, b) => {
@@ -278,7 +266,15 @@ const PP_UI = {
             const colorClass = PP_UI.getDisciplineColor(discipline);
             
             const summary = document.createElement('summary');
-            summary.innerHTML = `<span class="disc-tag ${colorClass}">${discipline.charAt(0)}</span> ${discipline} (${group.items.length})`;
+            
+            const tagSpan = document.createElement('span');
+            tagSpan.className = `pp-disc-tag ${colorClass}`;
+            tagSpan.textContent = discipline.charAt(0);
+            
+            const textNode = document.createTextNode(` ${discipline} (${group.items.length})`);
+            
+            summary.appendChild(tagSpan);
+            summary.appendChild(textNode);
             discContainer.appendChild(summary);
 
             const list = document.createElement('ul');
@@ -292,18 +288,38 @@ const PP_UI = {
     },
 
     createDrawingRow(dwg, projectId, areaId) {
-        const pid = projectId || '3051002';
-        const aid = areaId || '2532028'; 
-        const linkUrl = `https://app.procore.com/${pid}/project/drawing_areas/${aid}/drawing_log/view_fullscreen/${dwg.id}`;
-
         const li = document.createElement('li');
-        li.className = 'drawing-row';
-        li.innerHTML = `
-            <a href="${linkUrl}" target="_blank" class="drawing-link">
-                <span class="d-num">${dwg.num}</span>
-                <span class="d-title">${dwg.title}</span>
-            </a>
-        `;
+        li.className = 'pp-drawing-row';
+
+        if (!projectId || !areaId) {
+            const errSpan = document.createElement('span');
+            errSpan.className = 'pp-error-msg';
+            errSpan.style.color = '#999';
+            errSpan.style.fontSize = '11px';
+            errSpan.textContent = `${dwg.num} (Context Missing)`;
+            li.appendChild(errSpan);
+            return li;
+        }
+
+        const linkUrl = `https://app.procore.com/${projectId}/project/drawing_areas/${areaId}/drawing_log/view_fullscreen/${dwg.id}`;
+        
+        const a = document.createElement('a');
+        a.href = linkUrl;
+        a.target = "_blank";
+        a.className = 'pp-drawing-link';
+
+        const spanNum = document.createElement('span');
+        spanNum.className = 'pp-d-num';
+        spanNum.textContent = dwg.num; 
+
+        const spanTitle = document.createElement('span');
+        spanTitle.className = 'pp-d-title';
+        spanTitle.textContent = dwg.title;
+
+        a.appendChild(spanNum);
+        a.appendChild(spanTitle);
+        li.appendChild(a);
+
         return li;
     },
 
@@ -331,17 +347,17 @@ const PP_UI = {
             sections.forEach(section => {
                 section.style.display = ''; 
                 section.open = false;
-                section.querySelectorAll('.drawing-row').forEach(row => row.style.display = '');
+                section.querySelectorAll('.pp-drawing-row').forEach(row => row.style.display = '');
             });
             return;
         }
 
         sections.forEach(section => {
             let hasMatch = false;
-            const rows = section.querySelectorAll('.drawing-row');
+            const rows = section.querySelectorAll('.pp-drawing-row');
 
             rows.forEach(row => {
-                const text = row.innerText.toLowerCase();
+                const text = row.textContent.toLowerCase();
                 if (text.includes(term)) {
                     row.style.display = ''; 
                     hasMatch = true;
@@ -366,6 +382,9 @@ const PP_UI = {
 const PP_Core = {
     currentProjectId: null,
     currentMap: {}, 
+    dataBuffer: [],
+    debounceTimer: null,
+    isScanning: false,
 
     init() {
         PP_UI.init();
@@ -398,47 +417,72 @@ const PP_Core = {
         
         const rawData = event.data.payload;
         const ids = event.data.ids || {};
+        
         const activeProjectId = PP_Core.getIdsFromUrl().projectId || ids.projectId;
         if (!activeProjectId) return;
 
         const newMap = {};
         PP_Core.findDisciplinesRecursive(rawData, newMap, 0);
-        
         if (Object.keys(newMap).length > 0) {
-            this.currentMap = { ...this.currentMap, ...newMap };
-            await PP_Store.saveDisciplineMap(activeProjectId, this.currentMap);
-            PP_Store.getProjectData(activeProjectId).then(res => {
-                 if (res.data) PP_UI.renderState('DATA', { ...res.data, map: this.currentMap, projectId: activeProjectId });
-            });
+            PP_Core.currentMap = { ...PP_Core.currentMap, ...newMap };
+            PP_Store.saveDisciplineMap(activeProjectId, PP_Core.currentMap);
         }
 
         const foundDrawings = PP_Core.findDrawingsInObject(rawData);
+        
         if (foundDrawings.length > 0) {
-            const currentCache = await PP_Store.getProjectData(activeProjectId);
-            let merged = currentCache.data ? currentCache.data.drawings : [];
-            const existingIds = new Set(merged.map(d => d.id));
+            PP_Core.dataBuffer.push(...foundDrawings);
             
-            const newItems = foundDrawings.filter(d => !existingIds.has(d.id)).map(d => ({
+            if (PP_Core.isScanning) {
+                PP_UI.updateLoadButton(`Scanning... (${PP_Core.dataBuffer.length} pending)`, true);
+            }
+
+            if (PP_Core.debounceTimer) clearTimeout(PP_Core.debounceTimer);
+            
+            PP_Core.debounceTimer = setTimeout(() => {
+                PP_Core.flushBuffer(activeProjectId, ids);
+            }, 1500);
+        }
+    },
+
+    async flushBuffer(activeProjectId, ids) {
+        if (PP_Core.dataBuffer.length === 0) return;
+
+        PP_UI.updateLoadButton("Processing...", true);
+
+        const currentCache = await PP_Store.getProjectData(activeProjectId);
+        let merged = currentCache.data ? currentCache.data.drawings : [];
+        const existingIds = new Set(merged.map(d => d.id));
+
+        const newItems = PP_Core.dataBuffer
+            .filter(d => !existingIds.has(d.id))
+            .map(d => ({
                 id: d.id,
-                number: d.number || d.drawing_number,
+                num: d.number || d.drawing_number,
                 title: d.title,
                 discipline: d.discipline, 
-                drawing_discipline: d.drawing_discipline,
-                revision: d.revision_number
+                discipline_name: d.discipline_name || (d.discipline ? d.discipline.name : null)
             }));
 
-            if (newItems.length > 0) {
-                merged = [...merged, ...newItems];
-                const saved = await PP_Store.saveProjectData(activeProjectId, merged, ids.companyId, ids.drawingAreaId);
-                PP_UI.renderState('DATA', { ...saved, map: this.currentMap, projectId: activeProjectId });
-            }
+        PP_Core.dataBuffer = [];
+
+        if (newItems.length > 0) {
+            merged = [...merged, ...newItems];
+            const areaIdToSave = ids.drawingAreaId || (currentCache.data ? currentCache.data.drawingAreaId : null);
+            
+            const saved = await PP_Store.saveProjectData(activeProjectId, merged, ids.companyId, areaIdToSave);
+            PP_UI.renderState('DATA', { ...saved, map: PP_Core.currentMap, projectId: activeProjectId });
         }
+
+        PP_UI.updateLoadButton("Done!", false);
+        setTimeout(() => PP_UI.updateLoadButton("🔄 Load All Data", false), 3000);
+        PP_Core.isScanning = false;
     },
 
     findDisciplinesRecursive(obj, map, sortCounter) {
         if (!obj || typeof obj !== 'object') return;
         
-        if (obj.id && obj.name && typeof obj.name === 'string' && !obj.drawing_number && !obj.number && !obj.title) {
+        if (obj.id && obj.name && typeof obj.name === 'string' && !obj.drawing_number && !obj.number) {
             map[obj.id] = { name: obj.name, index: sortCounter };
         }
 
@@ -469,7 +513,7 @@ const PP_Core = {
 
     checkDrawingArray(arr) {
         if (arr.length === 0) return [];
-        if (arr[0].number || arr[0].drawing_number) return arr;
+        if ((arr[0].number || arr[0].drawing_number) && arr[0].id) return arr;
         return [];
     },
 
@@ -477,19 +521,142 @@ const PP_Core = {
         PP_UI.toggle(!PP_UI.isOpen);
     },
 
-    triggerLoadAll() {
-        const btn = document.getElementById('pp-load-all');
-        btn.innerText = "Expanding...";
-        btn.disabled = true;
-        const expandAllBtn = document.querySelector('.expand-button');
-        if (expandAllBtn) {
-             expandAllBtn.click();
-             setTimeout(() => { btn.innerText = "Done!"; btn.disabled = false; }, 2000);
-        } else {
-             window.location.reload();
+    // ----------------------------------------------------------------------
+    // NEW HELPER: Robust Scroll Container Finder
+    // ----------------------------------------------------------------------
+    findScrollContainer(startNode) {
+        // 1. BEST TARGET: AG Grid Body Viewport (Standard Procore Grid)
+        const agBody = document.querySelector('.ag-body-viewport');
+        if (agBody) {
+            console.log("PP: Found AG Grid viewport");
+            return agBody;
         }
+
+        // 2. Fallback: Largest scrollable div on screen
+        const allDivs = document.querySelectorAll('div');
+        let largestDiv = null;
+        let maxScroll = 0;
+
+        allDivs.forEach(div => {
+            if (div.scrollHeight > div.clientHeight + 100) { 
+                const style = window.getComputedStyle(div);
+                if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+                    if (div.scrollHeight > maxScroll) {
+                        maxScroll = div.scrollHeight;
+                        largestDiv = div;
+                    }
+                }
+            }
+        });
+
+        if (largestDiv) {
+            console.log("PP: Using largest scroll container:", largestDiv);
+            return largestDiv;
+        }
+        
+        // 3. Last Resort: Window
+        return window;
+    },
+
+    // ----------------------------------------------------------------------
+    // UPDATED LOAD FUNCTION
+    // ----------------------------------------------------------------------
+    async triggerLoadAll() {
+        const currentUrl = window.location.href;
+        const isDrawingPage = currentUrl.includes('/drawing_log') || currentUrl.includes('/drawings');
+        
+        if (!isDrawingPage) {
+            if (PP_Core.currentProjectId && PP_Core.currentMap) { 
+                const ids = PP_Core.getIdsFromUrl();
+                const targetUrl = `https://app.procore.com/${ids.projectId}/project/drawing_log`;
+                if (confirm("You are not on the Drawings page. Redirect there now?")) {
+                    window.location.href = targetUrl;
+                }
+            } else {
+                alert("Please navigate to the Project Drawings tool to load data.");
+            }
+            return;
+        }
+
+        const expandAllBtn = document.querySelector('.expand-button'); 
+        
+        PP_Core.isScanning = true;
+        PP_UI.updateLoadButton("🚀 Initializing Scan...", true);
+        
+        // --- STEP 1: FORCE RESET (THE FIX) ---
+        // We do NOT trust the current state. "Close All" might mean only 1 folder is open.
+        // We must Collapse everything first, then Open everything.
+        if (expandAllBtn) {
+            const ariaLabel = expandAllBtn.getAttribute('aria-label') || "";
+            // If it says "Close", it means *some* or *all* are open. 
+            // If it says "Expand", it means all are closed.
+            
+            const isPartiallyOrFullyExpanded = ariaLabel.toLowerCase().includes('close');
+
+            if (isPartiallyOrFullyExpanded) {
+                PP_UI.updateLoadButton("Resetting View...", true);
+                expandAllBtn.click(); // Click to Collapse All
+                await new Promise(r => setTimeout(r, 1000)); // Wait for render
+                
+                expandAllBtn.click(); // Click to Expand All
+                await new Promise(r => setTimeout(r, 1000)); // Wait for render
+            } else {
+                // It says "Expand", so all are closed. Just click once.
+                expandAllBtn.click();
+                await new Promise(r => setTimeout(r, 1000));
+            }
+        }
+
+        // --- STEP 2: LOCATE THE SCROLL JAIL ---
+        const scrollTarget = PP_Core.findScrollContainer(expandAllBtn || document.querySelector('.drawing-row'));
+        
+        if (!scrollTarget || scrollTarget === window) {
+            console.warn("PP: Could not locate specific scroll container. Defaulting to window.");
+        }
+
+        // --- STEP 3: TURBO SCROLL (With Patience) ---
+        let currentScroll = 0;
+        const scrollStep = 2500; 
+        let patience = 0; 
+        let lastHeight = 0;
+
+        const scroller = setInterval(() => {
+            if (scrollTarget === window) {
+                window.scrollTo(0, currentScroll);
+            } else {
+                scrollTarget.scrollTop = currentScroll;
+            }
+
+            currentScroll += scrollStep;
+            
+            const scrollHeight = scrollTarget === window ? document.body.scrollHeight : scrollTarget.scrollHeight;
+            const scrollTop = scrollTarget === window ? window.scrollY : scrollTarget.scrollTop;
+            const clientHeight = scrollTarget === window ? window.innerHeight : scrollTarget.clientHeight;
+
+            const progress = Math.min(Math.floor((scrollTop / scrollHeight) * 100), 99);
+            PP_UI.updateLoadButton(`Scanning... ${progress}%`, true);
+
+            if ((clientHeight + scrollTop) >= scrollHeight - 100) {
+                if (scrollHeight > lastHeight) {
+                    patience = 0; 
+                    lastHeight = scrollHeight;
+                } else {
+                    patience++;
+                }
+
+                if (patience >= 3) {
+                    clearInterval(scroller);
+                    
+                    if (scrollTarget === window) window.scrollTo(0, 0);
+                    else scrollTarget.scrollTop = 0;
+
+                    PP_UI.updateLoadButton("Processing Final Data...", true);
+                }
+            }
+        }, 600); 
     }
 };
 
+// Initialize
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => PP_Core.init());
 else PP_Core.init();

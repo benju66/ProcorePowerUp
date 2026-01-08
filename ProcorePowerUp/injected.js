@@ -1,6 +1,6 @@
-// injected.js - The Network Wiretap (Strict Whitelist)
+// injected.js - The Network Wiretap (Manifest V3 Main World)
 (function() {
-    console.log("Procore Power-Up: Wiretap installed. Waiting for drawing traffic...");
+    console.log("Procore Power-Up: Wiretap active in Main World.");
 
     function getIds() {
         const url = window.location.href;
@@ -24,25 +24,28 @@
         }, '*');
     }
 
-    // STRICT WHITELIST: Only allow Drawing-related or Metadata URLs
+    // STRICT WHITELIST
     function isRelevantUrl(url) {
         if (!url || !url.includes('procore.com')) return false;
         
-        // Exclude static assets
-        if (url.includes('.js') || url.includes('.css') || url.includes('.png')) return false;
+        const lower = url.toLowerCase();
 
-        // 1. Explicitly allow Drawing Endpoints
-        if (url.includes('drawing_log') || 
-            url.includes('drawing_revisions') || 
-            url.includes('drawing_areas') ||
-            url.includes('/drawings')) {
+        // 1. Exclude Binaries/Static (Performance Critical)
+        if (lower.match(/\.(png|jpg|gif|css|js|pdf|zip|svg|woff)(\?.*)?$/)) return false;
+        if (lower.includes('/pdf') || lower.includes('/download')) return false;
+
+        // 2. Explicitly allow Drawing Endpoints
+        if (lower.includes('drawing_log') || 
+            lower.includes('drawing_revisions') || 
+            lower.includes('drawing_areas') ||
+            lower.includes('/drawings')) {
             return true;
         }
 
-        // 2. Explicitly allow Metadata/Discipline Endpoints (The "Decoder Ring")
-        if (url.includes('groups') || 
-            url.includes('discipline') ||
-            url.includes('configurable_field_sets')) {
+        // 3. Explicitly allow Metadata/Discipline Endpoints
+        if (lower.includes('groups') || 
+            lower.includes('discipline') ||
+            lower.includes('configurable_field_sets')) {
             return true;
         }
 
@@ -53,10 +56,15 @@
     const originalSend = XMLHttpRequest.prototype.send;
     XMLHttpRequest.prototype.send = function() {
         this.addEventListener('load', function() {
-            if (isRelevantUrl(this.responseURL || this._url)) {
+            const url = this.responseURL || this._url;
+            if (isRelevantUrl(url)) {
+                // Sanity check Content-Type
+                const contentType = this.getResponseHeader('Content-Type');
+                if (contentType && !contentType.includes('application/json')) return;
+
                 try {
                     const data = JSON.parse(this.responseText);
-                    broadcast(data, this.responseURL || this._url);
+                    broadcast(data, url);
                 } catch (e) { /* Not JSON */ }
             }
         });
@@ -67,13 +75,18 @@
     const originalFetch = window.fetch;
     window.fetch = async function(input, init) {
         const response = await originalFetch(input, init);
+        
         let url = (input instanceof Request) ? input.url : input;
-
+        
         if (isRelevantUrl(url)) {
-             const clone = response.clone();
-             clone.json().then(data => {
-                 broadcast(data, url);
-             }).catch(e => {});
+             // Clone only if JSON to avoid binary overhead
+             const contentType = response.headers.get('content-type');
+             if (contentType && contentType.includes('application/json')) {
+                 const clone = response.clone();
+                 clone.json().then(data => {
+                     broadcast(data, url);
+                 }).catch(e => {});
+             }
         }
         return response;
     };

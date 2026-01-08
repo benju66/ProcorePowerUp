@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Procore Power-Up Sidebar",
-  "version": "1.4",
+  "version": "1.5",
   "description": "Global drawing tree using network interception.",
   "permissions": [
     "storage"
@@ -9,17 +9,18 @@
   "host_permissions": [
     "https://*.procore.com/*"
   ],
-  "web_accessible_resources": [
-    {
-      "resources": ["injected.js"],
-      "matches": ["https://*.procore.com/*"]
-    }
-  ],
   "content_scripts": [
+    {
+      "matches": ["https://*.procore.com/*"],
+      "js": ["injected.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
     {
       "matches": ["https://*.procore.com/*"],
       "js": ["content.js"],
       "css": ["styles.css"],
+      "world": "ISOLATED",
       "run_at": "document_start"
     }
   ]
