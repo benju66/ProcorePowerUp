@@ -1,4 +1,4 @@
-// injected.js - The Network Wiretap
+// injected.js - The Network Wiretap (Aggressive Mode)
 (function() {
     console.log("Procore Power-Up: Wiretap installed. Waiting for traffic...");
 
@@ -9,25 +9,34 @@
         const companyMatch = url.match(/companies\/(\d+)/);
         
         return {
-            companyId: companyMatch ? companyMatch[1] : '8906',
-            projectId: projectMatch ? projectMatch[1] : '3051002',
-            drawingAreaId: areaMatch ? areaMatch[1] : '2532028'
+            companyId: companyMatch ? companyMatch[1] : null,
+            projectId: projectMatch ? projectMatch[1] : null,
+            drawingAreaId: areaMatch ? areaMatch[1] : null
         };
     }
 
-    function broadcast(data) {
-        window.postMessage({ type: 'PP_DATA', payload: data, ids: getIds() }, '*');
+    function broadcast(data, sourceUrl) {
+        window.postMessage({ 
+            type: 'PP_DATA', 
+            payload: data, 
+            ids: getIds(),
+            source: sourceUrl 
+        }, '*');
+    }
+
+    // Capture ALL Procore API traffic to ensure we catch the metadata
+    function isRelevantUrl(url) {
+        return url && url.includes('procore.com') && !url.includes('.js') && !url.includes('.css');
     }
 
     // 1. Intercept XHR
     const originalSend = XMLHttpRequest.prototype.send;
     XMLHttpRequest.prototype.send = function() {
         this.addEventListener('load', function() {
-            const url = this.responseURL || this._url || "";
-            if (url.includes('drawing_log') || url.includes('drawing_revisions')) {
+            if (isRelevantUrl(this.responseURL || this._url)) {
                 try {
                     const data = JSON.parse(this.responseText);
-                    broadcast(data);
+                    broadcast(data, this.responseURL || this._url);
                 } catch (e) { /* Not JSON */ }
             }
         });
@@ -37,15 +46,13 @@
     // 2. Intercept Fetch
     const originalFetch = window.fetch;
     window.fetch = async function(input, init) {
-        let url = input;
-        if (input instanceof Request) url = input.url;
-
         const response = await originalFetch(input, init);
+        let url = (input instanceof Request) ? input.url : input;
 
-        if (url && (url.includes('drawing_log') || url.includes('drawing_revisions'))) {
+        if (isRelevantUrl(url)) {
              const clone = response.clone();
              clone.json().then(data => {
-                 broadcast(data);
+                 broadcast(data, url);
              }).catch(e => {});
         }
         return response;

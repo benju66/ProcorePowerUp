@@ -1,4 +1,4 @@
-// content.js - Phase 1 Fix: Aggressive Discipline Grouping
+// content.js - Fix: Forced Sort Order & Debug
 
 // --- 1. INJECT WIRETAP ---
 const script = document.createElement('script');
@@ -7,69 +7,58 @@ script.onload = function() { this.remove(); };
 (document.head || document.documentElement).appendChild(script);
 
 // ==========================================
-// MODULE: STORE (Persistence Layer)
+// MODULE: STORE
 // ==========================================
 const PP_Store = {
     async saveProjectData(projectId, drawings, companyId, areaId) {
         if (!projectId) return;
-        
-        const timestamp = Date.now();
         const key = `pp_cache_${projectId}`;
-        
-        // Sanitize to save storage space
-        const sanitizedDrawings = drawings.map(d => ({
-            id: d.id,
-            number: d.number || d.drawing_number,
-            title: d.title,
-            // Capture ALL potential discipline fields to ensure we have the data
-            discipline: d.discipline,
-            drawing_discipline: d.drawing_discipline,
-            primary_discipline: d.primary_discipline,
-            discipline_name: d.discipline_name,
-            
-            drawing_set: d.drawing_set || d.drawing_set_title,
-            revision: d.revision_number || d.current_revision_id
-        }));
-
         const payload = {
-            timestamp,
+            timestamp: Date.now(),
             companyId,
             drawingAreaId: areaId,
-            drawings: sanitizedDrawings
+            drawings: drawings
         };
+        chrome.storage.local.set({ [key]: payload });
+        return payload;
+    },
 
+    async saveDisciplineMap(projectId, mapData) {
+        if (!projectId) return;
+        const key = `pp_map_${projectId}`;
+        // We overwrite the map completely to ensure sort order is fresh
         return new Promise((resolve) => {
-            chrome.storage.local.set({ [key]: payload }, () => {
-                console.log(`Procore Power-Up: Saved ${sanitizedDrawings.length} drawings.`);
-                resolve(payload);
-            });
+            chrome.storage.local.set({ [key]: mapData }, () => resolve(mapData));
         });
     },
 
     async getProjectData(projectId) {
-        if (!projectId) return null;
-        const key = `pp_cache_${projectId}`;
+        if (!projectId) return { data: null, map: {} };
+        const dKey = `pp_cache_${projectId}`;
+        const mKey = `pp_map_${projectId}`;
         return new Promise((resolve) => {
-            chrome.storage.local.get([key], (result) => {
-                resolve(result[key] || null);
+            chrome.storage.local.get([dKey, mKey], (result) => {
+                resolve({
+                    data: result[dKey] || null,
+                    map: result[mKey] || {}
+                });
             });
         });
     }
 };
 
 // ==========================================
-// MODULE: UI (Rendering Layer)
+// MODULE: UI
 // ==========================================
 const PP_UI = {
     isOpen: false,
 
     init() {
         if (document.getElementById('pp-toggle-btn')) return;
-
+        
         const toggleBtn = document.createElement('div');
         toggleBtn.id = 'pp-toggle-btn';
         toggleBtn.innerHTML = '📂'; 
-        toggleBtn.title = "Open Drawing Tree";
         toggleBtn.onclick = () => PP_Core.toggleSidebar();
         document.body.appendChild(toggleBtn);
 
@@ -86,8 +75,7 @@ const PP_UI = {
             <div class="pp-search-box">
                 <input type="text" id="pp-search" placeholder="Filter drawings...">
             </div>
-            <div id="pp-tree-content" class="pp-content">
-                </div>
+            <div id="pp-tree-content" class="pp-content"></div>
             <div class="pp-footer" id="pp-footer"></div>
         `;
         document.body.appendChild(sidebar);
@@ -99,34 +87,28 @@ const PP_UI = {
 
     toggle(openState) {
         this.isOpen = openState;
-        const sidebar = document.getElementById('pp-sidebar');
-        if (openState) sidebar.classList.add('open');
-        else sidebar.classList.remove('open');
+        document.getElementById('pp-sidebar').classList.toggle('open', openState);
     },
 
-    renderState(stateType, data = null) {
+    renderState(stateType, payload = {}) {
         const treeRoot = document.getElementById('pp-tree-content');
         const footer = document.getElementById('pp-footer');
-        const loadBtn = document.getElementById('pp-load-all');
-
+        
         if (stateType === 'LOADING') {
             treeRoot.innerHTML = `<div class="empty-state"><p>Loading...</p></div>`;
         } else if (stateType === 'EMPTY') {
-            treeRoot.innerHTML = `<div class="empty-state"><p><strong>No drawings found.</strong></p><p>Click "Load All Data" to fetch.</p></div>`;
+            treeRoot.innerHTML = `<div class="empty-state"><p><strong>No drawings found.</strong></p><p>Please <b>Refresh the Page</b> to capture discipline names, then click "Load All Data".</p></div>`;
             footer.innerText = "";
         } else if (stateType === 'DATA') {
-            PP_UI.buildTree(data.drawings, data.projectId, data.drawingAreaId);
-            const dateStr = new Date(data.timestamp).toLocaleString();
+            PP_UI.buildTree(payload.drawings, payload.map, payload.projectId, payload.drawingAreaId);
+            const dateStr = new Date(payload.timestamp).toLocaleString();
             footer.innerText = `Last updated: ${dateStr}`;
         }
     },
 
-    // --- UPDATED TREE LOGIC ---
-    buildTree(drawings, projectId, areaId) {
+    buildTree(drawings, discMap, projectId, areaId) {
         const treeRoot = document.getElementById('pp-tree-content');
         treeRoot.innerHTML = ''; 
-
-        const SHOW_CUSTOM_FOLDERS = false; 
 
         const validDrawings = drawings.filter(d => d.number || d.drawing_number);
         if (validDrawings.length === 0) {
@@ -134,81 +116,60 @@ const PP_UI = {
             return;
         }
 
-        // DEBUG: Log the first drawing to Console so we can inspect keys if this fails again
-        console.log("Procore Power-Up: DEBUG - First Drawing Object:", validDrawings[0]);
-
         const groups = {};
+        const disciplineKeys = []; 
 
         validDrawings.forEach(dwg => {
             const num = dwg.number || dwg.drawing_number;
             const title = dwg.title || "No Title";
             const id = dwg.id;
             
-            // --- FIX: Aggressive Discipline Detection ---
-            let disc = null;
+            // --- DISCIPLINE LOGIC ---
+            let discName = "General";
+            let sortIndex = 9999; 
 
-            // 1. Try 'drawing_discipline' (often string or object)
-            if (dwg.drawing_discipline) {
-                disc = (typeof dwg.drawing_discipline === 'object') ? dwg.drawing_discipline.name : dwg.drawing_discipline;
-            }
-            // 2. Try 'discipline' (often string or object)
-            else if (dwg.discipline) {
-                disc = (typeof dwg.discipline === 'object') ? (dwg.discipline.name || dwg.discipline.title) : dwg.discipline;
-            }
-            // 3. Try 'discipline_name' (usually string)
-            else if (dwg.discipline_name) {
-                disc = dwg.discipline_name;
-            }
-            // 4. Try 'primary_discipline' (some endpoints)
-            else if (dwg.primary_discipline) {
-                disc = (typeof dwg.primary_discipline === 'object') ? dwg.primary_discipline.name : dwg.primary_discipline;
-            }
-
-            // 5. Fallback: Letter Mapping (e.g. A101 -> Architectural)
-            if (!disc && num) {
-                const firstChar = num.charAt(0).toUpperCase();
-                const map = {'A': 'Architectural', 'S': 'Structural', 'M': 'Mechanical', 'E': 'Electrical', 'P': 'Plumbing', 'C': 'Civil', 'L': 'Landscape', 'I': 'Interiors', 'F': 'Fire Protection'};
-                if(map[firstChar]) disc = map[firstChar];
-            }
-
-            // 6. Final Fallback
-            if (!disc) disc = "General";
-
-            // Optional: Handle Set Names (Only if needed to split large sets)
-            if (dwg.drawing_set) {
-                const set = dwg.drawing_set;
-                const setName = (typeof set === 'object') ? (set.name || set.title) : set;
-                // Only prepend set name if it's NOT the "Current Set" to keep list clean
-                if (setName && typeof setName === 'string' && !setName.toLowerCase().includes('current')) {
-                     // Uncomment below if you want to group by "Set - Discipline"
-                     // disc = `${setName} - ${disc}`;
+            if (dwg.discipline && dwg.discipline.id) {
+                const mapEntry = discMap[dwg.discipline.id];
+                if (mapEntry) {
+                    discName = mapEntry.name || mapEntry; // Handle both Object and String formats
+                    sortIndex = mapEntry.index !== undefined ? mapEntry.index : 9999;
                 }
+            } else if (dwg.discipline_name) {
+                discName = dwg.discipline_name;
             }
 
-            if (!groups[disc]) groups[disc] = [];
-            groups[disc].push({ num, title, id, raw: dwg });
+            if (!groups[discName]) {
+                groups[discName] = { items: [], order: sortIndex };
+                disciplineKeys.push(discName);
+            }
+            groups[discName].items.push({ num, title, id, raw: dwg });
         });
 
-        // Rendering DOM
-        Object.keys(groups).sort().forEach(discipline => {
+        // --- SORT LOGIC ---
+        disciplineKeys.sort((a, b) => {
+            const orderA = groups[a].order;
+            const orderB = groups[b].order;
+            if (orderA !== 9999 && orderB !== 9999) return orderA - orderB;
+            if (orderA !== 9999) return -1;
+            if (orderB !== 9999) return 1;
+            return a.localeCompare(b);
+        });
+
+        disciplineKeys.forEach(discipline => {
+            const group = groups[discipline];
             const discContainer = document.createElement('details');
             discContainer.open = false; 
-            discContainer.className = 'tree-discipline';
             
             const colorClass = PP_UI.getDisciplineColor(discipline);
+            
             const summary = document.createElement('summary');
-            summary.innerHTML = `<span class="disc-tag ${colorClass}">${discipline.charAt(0)}</span> ${discipline} (${groups[discipline].length})`;
+            summary.innerHTML = `<span class="disc-tag ${colorClass}">${discipline.charAt(0)}</span> ${discipline} (${group.items.length})`;
             discContainer.appendChild(summary);
 
             const list = document.createElement('ul');
-            
-            let drawingsToRender = groups[discipline];
-
-            if (SHOW_CUSTOM_FOLDERS) {
-                // ... (Logic hidden as requested) ...
-            }
-
-            drawingsToRender.sort(PP_UI.sortDrawings).forEach(dwg => list.appendChild(PP_UI.createDrawingRow(dwg, projectId, areaId)));
+            group.items.sort(PP_UI.sortDrawings).forEach(dwg => {
+                list.appendChild(PP_UI.createDrawingRow(dwg, projectId, areaId));
+            });
 
             discContainer.appendChild(list);
             treeRoot.appendChild(discContainer);
@@ -216,24 +177,16 @@ const PP_UI = {
     },
 
     createDrawingRow(dwg, projectId, areaId) {
-        const li = document.createElement('li');
-        li.className = 'drawing-row';
-        
-        let tags = '';
-        const rev = dwg.raw?.revision || dwg.raw?.revision_number || dwg.raw?.current_revision_id;
-        if (rev && parseInt(rev) > 5) {
-            tags += `<span class="tag warning">Rev ${rev}</span>`;
-        }
-
         const pid = projectId || '3051002';
         const aid = areaId || '2532028'; 
         const linkUrl = `https://app.procore.com/${pid}/project/drawing_areas/${aid}/drawing_log/view_fullscreen/${dwg.id}`;
 
+        const li = document.createElement('li');
+        li.className = 'drawing-row';
         li.innerHTML = `
             <a href="${linkUrl}" target="_blank" class="drawing-link">
                 <span class="d-num">${dwg.num}</span>
                 <span class="d-title">${dwg.title}</span>
-                ${tags}
             </a>
         `;
         return li;
@@ -257,140 +210,134 @@ const PP_UI = {
 
     filterTree() {
         const term = document.getElementById('pp-search').value.toLowerCase();
-        const rows = document.querySelectorAll('.drawing-row');
-        rows.forEach(row => {
+        document.querySelectorAll('.drawing-row').forEach(row => {
             const text = row.innerText.toLowerCase();
-            if (text.includes(term)) {
-                row.style.display = 'block';
-                let parent = row.parentElement.parentElement; 
-                if(parent.tagName === 'DETAILS') parent.open = true;
-                if(parent.parentElement.parentElement.tagName === 'DETAILS') parent.parentElement.parentElement.open = true;
-            } else {
-                row.style.display = 'none';
-            }
+            const show = text.includes(term);
+            row.style.display = show ? 'block' : 'none';
+            if (show) row.closest('details').open = true;
         });
     }
 };
 
 // ==========================================
-// MODULE: CORE (Logic & Event Handling)
+// MODULE: CORE
 // ==========================================
 const PP_Core = {
     currentProjectId: null,
-    currentAreaId: null,
-    currentDrawings: [],
+    currentMap: {}, 
 
     init() {
         PP_UI.init();
-        
         const ids = PP_Core.getIdsFromUrl();
         this.currentProjectId = ids.projectId;
-        this.currentAreaId = ids.drawingAreaId;
-
-        console.log("Procore Power-Up: Initializing for Project:", this.currentProjectId);
 
         if (this.currentProjectId) {
-            PP_Store.getProjectData(this.currentProjectId).then(data => {
-                if (data && data.drawings && data.drawings.length > 0) {
-                    console.log("Procore Power-Up: Loaded from cache.");
-                    this.currentDrawings = data.drawings;
-                    if (!data.drawingAreaId && this.currentAreaId) data.drawingAreaId = this.currentAreaId;
-                    PP_UI.renderState('DATA', { ...data, projectId: this.currentProjectId });
+            PP_Store.getProjectData(this.currentProjectId).then(res => {
+                this.currentMap = res.map;
+                if (res.data && res.data.drawings) {
+                    PP_UI.renderState('DATA', { ...res.data, map: res.map, projectId: this.currentProjectId });
                 } else {
                     PP_UI.renderState('EMPTY');
                 }
             });
-        } else {
-            PP_UI.renderState('EMPTY');
         }
-
         window.addEventListener("message", PP_Core.handleWiretapMessage);
     },
 
     getIdsFromUrl() {
         const url = window.location.href;
-        const projectMatch = url.match(/projects\/(\d+)/) || url.match(/\/(\d+)\/project/);
-        const areaMatch = url.match(/areas\/(\d+)/) || url.match(/drawing_areas\/(\d+)/);
-        const companyMatch = url.match(/companies\/(\d+)/);
-        
-        return {
-            companyId: companyMatch ? companyMatch[1] : null,
-            projectId: projectMatch ? projectMatch[1] : null,
-            drawingAreaId: areaMatch ? areaMatch[1] : null
-        };
+        const p = url.match(/projects\/(\d+)/) || url.match(/\/(\d+)\/project/);
+        const a = url.match(/areas\/(\d+)/) || url.match(/drawing_areas\/(\d+)/);
+        const c = url.match(/companies\/(\d+)/);
+        return { companyId: c?c[1]:null, projectId: p?p[1]:null, drawingAreaId: a?a[1]:null };
     },
 
     async handleWiretapMessage(event) {
-        if (event.source !== window) return;
-        if (event.data.type !== 'PP_DATA') return;
-
+        if (event.source !== window || event.data.type !== 'PP_DATA') return;
+        
         const rawData = event.data.payload;
         const ids = event.data.ids || {};
-
-        const urlIds = PP_Core.getIdsFromUrl();
-        const activeProjectId = urlIds.projectId || ids.projectId;
-        const activeAreaId = urlIds.drawingAreaId || ids.drawingAreaId;
-        const activeCompanyId = urlIds.companyId || ids.companyId;
-
+        const activeProjectId = PP_Core.getIdsFromUrl().projectId || ids.projectId;
         if (!activeProjectId) return;
 
-        const found = PP_Core.findDrawingsInObject(rawData);
-
-        if (found.length > 0) {
-            console.log(`Procore Power-Up: Wiretap captured ${found.length} items.`);
+        // --- MAP DISCOVERY ---
+        const newMap = {};
+        PP_Core.findDisciplinesRecursive(rawData, newMap, 0);
+        
+        if (Object.keys(newMap).length > 0) {
+            // Log what we found to the console for debugging
+            console.log("Procore Power-Up: 🎯 CAPTURED MAP:", newMap);
             
-            const existingIds = new Set(PP_Core.currentDrawings.map(d => d.id));
-            const newItems = found.filter(d => !existingIds.has(d.id));
+            this.currentMap = { ...this.currentMap, ...newMap };
+            await PP_Store.saveDisciplineMap(activeProjectId, this.currentMap);
             
-            if (newItems.length > 0 || PP_Core.currentDrawings.length === 0) {
-                // Add new items
-                const cleanNewItems = newItems.map(d => ({
-                    id: d.id,
-                    number: d.number || d.drawing_number,
-                    title: d.title,
-                    discipline: d.discipline,
-                    drawing_discipline: d.drawing_discipline, // CAPTURE EXTRA FIELDS
-                    primary_discipline: d.primary_discipline,
-                    discipline_name: d.discipline_name,
-                    drawing_set: d.drawing_set || d.drawing_set_title,
-                    revision_number: d.revision_number || d.current_revision_id
-                }));
+            PP_Store.getProjectData(activeProjectId).then(res => {
+                 if (res.data) PP_UI.renderState('DATA', { ...res.data, map: this.currentMap, projectId: activeProjectId });
+            });
+        }
 
-                PP_Core.currentDrawings = [...PP_Core.currentDrawings, ...cleanNewItems];
-                
-                const savedData = await PP_Store.saveProjectData(
-                    activeProjectId, 
-                    PP_Core.currentDrawings, 
-                    activeCompanyId, 
-                    activeAreaId
-                );
+        // --- DRAWING DISCOVERY ---
+        const foundDrawings = PP_Core.findDrawingsInObject(rawData);
+        if (foundDrawings.length > 0) {
+            const currentCache = await PP_Store.getProjectData(activeProjectId);
+            let merged = currentCache.data ? currentCache.data.drawings : [];
+            const existingIds = new Set(merged.map(d => d.id));
+            
+            const newItems = foundDrawings.filter(d => !existingIds.has(d.id)).map(d => ({
+                id: d.id,
+                number: d.number || d.drawing_number,
+                title: d.title,
+                discipline: d.discipline, 
+                drawing_discipline: d.drawing_discipline,
+                revision: d.revision_number
+            }));
 
-                PP_UI.renderState('DATA', { 
-                    ...savedData, 
-                    projectId: activeProjectId 
-                });
+            if (newItems.length > 0) {
+                merged = [...merged, ...newItems];
+                const saved = await PP_Store.saveProjectData(activeProjectId, merged, ids.companyId, ids.drawingAreaId);
+                PP_UI.renderState('DATA', { ...saved, map: this.currentMap, projectId: activeProjectId });
+            }
+        }
+    },
+
+    findDisciplinesRecursive(obj, map, sortCounter) {
+        if (!obj || typeof obj !== 'object') return;
+        
+        // Strict Check: Must have ID and Name, but NOT be a drawing
+        if (obj.id && obj.name && typeof obj.name === 'string' && !obj.drawing_number && !obj.number && !obj.title) {
+            map[obj.id] = { name: obj.name, index: sortCounter };
+        }
+
+        if (Array.isArray(obj)) {
+            obj.forEach((item, index) => {
+                // IMPORTANT: We use the array index as the sort counter
+                PP_Core.findDisciplinesRecursive(item, map, index); 
+            });
+        } else {
+            for (const key in obj) {
+                if (Object.prototype.hasOwnProperty.call(obj, key)) {
+                    // If it's an object, we can't trust the order, so we pass the existing counter
+                    PP_Core.findDisciplinesRecursive(obj[key], map, sortCounter);
+                }
             }
         }
     },
 
     findDrawingsInObject(obj) {
         if (!obj) return [];
-        if (Array.isArray(obj)) return PP_Core.checkArray(obj);
+        if (Array.isArray(obj)) return PP_Core.checkDrawingArray(obj);
         for (let key in obj) {
             if (Array.isArray(obj[key])) {
-                const result = PP_Core.checkArray(obj[key]);
-                if (result.length > 0) return result;
+                const res = PP_Core.checkDrawingArray(obj[key]);
+                if (res.length > 0) return res;
             }
         }
         return [];
     },
 
-    checkArray(arr) {
+    checkDrawingArray(arr) {
         if (arr.length === 0) return [];
-        const item = arr[0];
-        if (item.number || item.drawing_number || (item.id && item.discipline) || (item.id && item.drawing_discipline)) {
-            return arr;
-        }
+        if (arr[0].number || arr[0].drawing_number) return arr;
         return [];
     },
 
@@ -402,31 +349,15 @@ const PP_Core = {
         const btn = document.getElementById('pp-load-all');
         btn.innerText = "Expanding...";
         btn.disabled = true;
-
         const expandAllBtn = document.querySelector('.expand-button');
-
-        if (!expandAllBtn) {
-             alert("Could not find the 'Expand All' button. Please ensure you are on the Drawing Log page.");
-             btn.innerText = "🔄 Load All Data";
-             btn.disabled = false;
-             return;
+        if (expandAllBtn) {
+             expandAllBtn.click();
+             setTimeout(() => { btn.innerText = "Done!"; btn.disabled = false; }, 2000);
+        } else {
+             window.location.reload();
         }
-
-        console.log("Procore Power-Up: Clicking 'Expand All'...");
-        expandAllBtn.click();
-
-        setTimeout(() => {
-            btn.innerText = "Done!";
-            setTimeout(() => { 
-                btn.innerText = "🔄 Load All Data"; 
-                btn.disabled = false; 
-            }, 2000);
-        }, 1000);
     }
 };
 
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => PP_Core.init());
-} else {
-    PP_Core.init();
-}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => PP_Core.init());
+else PP_Core.init();
