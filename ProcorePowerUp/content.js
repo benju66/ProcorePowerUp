@@ -89,7 +89,7 @@ function initUI() {
         <div id="pp-tree-content" class="pp-content">
             <div class="empty-state">
                 <p><strong>Waiting for data...</strong></p>
-                <p>Click the <strong>"Load All Data"</strong> button above to auto-expand the list.</p>
+                <p>Click the <strong>"Load All Data"</strong> button above to expand the list.</p>
             </div>
         </div>
     `;
@@ -100,45 +100,41 @@ function initUI() {
     document.getElementById('pp-load-all').addEventListener('click', expandAllGroups);
 }
 
-// --- 4. THE "LOAD ALL" FUNCTION ---
+// --- 4. THE "LOAD ALL" FUNCTION (UPDATED) ---
 function expandAllGroups() {
     const btn = document.getElementById('pp-load-all');
     btn.innerText = "Expanding...";
     btn.disabled = true;
 
-    // TARGET: Rows that are groups AND are currently contracted
-    // [cite: 1327] "ag-row-group-contracted" is the key class
-    const collapsedGroups = document.querySelectorAll('.ag-row-group-contracted');
+    // TARGET: The specific "Expand/Collapse All" button from Procore's UI
+    // We use the class 'expand-button' which matches the code you provided.
+    const expandAllBtn = document.querySelector('.expand-button');
 
-    if (collapsedGroups.length === 0) {
-        alert("No collapsed groups found! Try scrolling down to load more rows.");
-        btn.innerText = "🔄 Load All Data";
-        btn.disabled = false;
-        return;
+    if (!expandAllBtn) {
+         // Fallback if the UI changed, but usually this is stable
+         alert("Could not find the 'Expand All' button on the page. Please click the small caret icon in the table header manually.");
+         btn.innerText = "🔄 Load All Data";
+         btn.disabled = false;
+         return;
     }
 
-    console.log(`Procore Power-Up: Found ${collapsedGroups.length} groups to expand.`);
+    console.log("Procore Power-Up: Clicking 'Expand All' button...");
+    
+    // Click the main toggle
+    expandAllBtn.click();
 
-    let i = 0;
-    const interval = setInterval(() => {
-        if (i >= collapsedGroups.length) {
-            clearInterval(interval);
-            btn.innerText = "Done!";
-            setTimeout(() => { 
-                btn.innerText = "🔄 Load All Data"; 
-                btn.disabled = false; 
-            }, 2000);
-            return;
-        }
-        
-        // Find the specific expand icon inside the row
-        // [cite: 1330] The icon is inside "hsVray _expandableCaret_pq41h_18"
-        const expander = collapsedGroups[i].querySelector('[aria-label="Expand group"]');
-        if (expander) {
-            expander.click(); // Trigger Procore to load the data
-        }
-        i++;
-    }, 300); // 300ms delay to be polite to the server
+    // OPTIONAL: Double-check logic
+    // If the button was in "Collapse" mode (meaning everything closes), we might need to click it again.
+    // For now, a single click usually toggles state. If you see it close everything, just click it again manually.
+    
+    // Reset button after a delay to allow data to load
+    setTimeout(() => {
+        btn.innerText = "Done!";
+        setTimeout(() => { 
+            btn.innerText = "🔄 Load All Data"; 
+            btn.disabled = false; 
+        }, 2000);
+    }, 1000);
 }
 
 function updateSidebarUI() {
@@ -197,7 +193,6 @@ function buildTree(drawings, ids) {
 
         const list = document.createElement('ul');
         
-        // Unit Plan Logic
         const unitPlans = [];
         const otherPlans = [];
 
