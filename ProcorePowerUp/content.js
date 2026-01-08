@@ -1,4 +1,4 @@
-// --- 1. INJECT WIRETAP IMMEDIATELY ---
+// --- 1. INJECT WIRETAP ---
 const script = document.createElement('script');
 script.src = chrome.runtime.getURL('injected.js');
 script.onload = function() { this.remove(); };
@@ -6,67 +6,54 @@ script.onload = function() { this.remove(); };
 
 // --- GLOBAL VARIABLES ---
 let isSidebarOpen = false;
-let globalDrawings = []; // Accumulate drawings found
+let globalDrawings = []; 
 let globalIds = { projectId: '3051002', drawingAreaId: '2532028' }; 
 
-// --- 2. SMART DATA PROCESSOR ---
-// recursively search any object for an array that looks like drawings
-function findDrawingsInObject(obj) {
-    if (!obj) return [];
-    
-    // If it is an array, check the first item
-    if (Array.isArray(obj)) {
-        if (obj.length > 0 && (obj[0].number || obj[0].drawing_number || obj[0].title)) {
-            return obj; // Found them!
-        }
-        return [];
-    }
-
-    // If it is an object, scan its keys (e.g., data.items or data.drawing_revisions)
-    if (typeof obj === 'object') {
-        for (let key in obj) {
-            if (Array.isArray(obj[key])) {
-                const arr = obj[key];
-                if (arr.length > 0 && (arr[0].number || arr[0].drawing_number || arr[0].title)) {
-                    return arr;
-                }
-            }
-        }
-    }
-    return [];
-}
-
+// --- 2. LISTEN FOR DATA ---
 window.addEventListener("message", (event) => {
     if (event.source !== window) return;
 
     if (event.data.type === 'PP_DATA') {
         const rawData = event.data.payload;
-        if (event.data.ids) globalIds = event.data.ids;
+        if (event.data.ids && event.data.ids.projectId) globalIds = event.data.ids;
 
-        // Use the "Smart Search" to find drawings inside the packet
         const found = findDrawingsInObject(rawData);
 
         if (found.length > 0) {
-            console.log(`Procore Power-Up: Found ${found.length} drawings in packet!`);
-            // Add to our master list (avoid duplicates)
-            const newDrawings = found.filter(d => !globalDrawings.some(g => g.id === d.id));
-            globalDrawings = [...globalDrawings, ...newDrawings];
+            console.log(`Procore Power-Up: Captured ${found.length} drawings.`);
             
-            const treeRoot = document.getElementById('pp-tree-content');
-            if (treeRoot && isSidebarOpen) {
-                 buildTree(globalDrawings, globalIds);
-            } else if (treeRoot) {
-                treeRoot.innerHTML = `<div style="padding:20px; text-align:center; color:green;">
-                    <strong>${globalDrawings.length} Drawings Captured!</strong><br>
-                    The list is ready.
-                </div>`;
-            }
+            // Merge with existing list (avoid duplicates)
+            const existingIds = new Set(globalDrawings.map(d => d.id));
+            const newItems = found.filter(d => !existingIds.has(d.id));
+            globalDrawings = [...globalDrawings, ...newItems];
+
+            updateSidebarUI();
         }
     }
 });
 
-// --- 3. UI LOGIC ---
+function findDrawingsInObject(obj) {
+    if (!obj) return [];
+    if (Array.isArray(obj)) return checkArray(obj);
+    for (let key in obj) {
+        if (Array.isArray(obj[key])) {
+            const result = checkArray(obj[key]);
+            if (result.length > 0) return result;
+        }
+    }
+    return [];
+}
 
+function checkArray(arr) {
+    if (arr.length === 0) return [];
+    const item = arr[0];
+    if (item.number || item.drawing_number || item.title || (item.id && item.discipline)) {
+        return arr;
+    }
+    return [];
+}
+
+// --- 3. UI INITIALIZATION ---
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initUI);
 } else {
@@ -90,13 +77,19 @@ function initUI() {
             <h3>Project Drawings</h3>
             <span class="close-btn" id="pp-close">&times;</span>
         </div>
+        
+        <div class="pp-controls">
+            <button id="pp-load-all" class="pp-btn-primary">🔄 Load All Data</button>
+        </div>
+
         <div class="pp-search-box">
             <input type="text" id="pp-search" placeholder="Filter drawings...">
         </div>
+        
         <div id="pp-tree-content" class="pp-content">
-            <div class="loading-spinner" style="text-align:center; padding:20px; color:#666;">
-                <p>Waiting for data...</p>
-                <p style="font-size: 11px;">Please <strong>REFRESH (F5)</strong> the page to start capturing.</p>
+            <div class="empty-state">
+                <p><strong>Waiting for data...</strong></p>
+                <p>Click the <strong>"Load All Data"</strong> button above to auto-expand the list.</p>
             </div>
         </div>
     `;
@@ -104,38 +97,83 @@ function initUI() {
 
     document.getElementById('pp-close').onclick = toggleSidebar;
     document.getElementById('pp-search').addEventListener('keyup', filterTree);
+    document.getElementById('pp-load-all').addEventListener('click', expandAllGroups);
+}
+
+// --- 4. THE "LOAD ALL" FUNCTION ---
+function expandAllGroups() {
+    const btn = document.getElementById('pp-load-all');
+    btn.innerText = "Expanding...";
+    btn.disabled = true;
+
+    // TARGET: Rows that are groups AND are currently contracted
+    // [cite: 1327] "ag-row-group-contracted" is the key class
+    const collapsedGroups = document.querySelectorAll('.ag-row-group-contracted');
+
+    if (collapsedGroups.length === 0) {
+        alert("No collapsed groups found! Try scrolling down to load more rows.");
+        btn.innerText = "🔄 Load All Data";
+        btn.disabled = false;
+        return;
+    }
+
+    console.log(`Procore Power-Up: Found ${collapsedGroups.length} groups to expand.`);
+
+    let i = 0;
+    const interval = setInterval(() => {
+        if (i >= collapsedGroups.length) {
+            clearInterval(interval);
+            btn.innerText = "Done!";
+            setTimeout(() => { 
+                btn.innerText = "🔄 Load All Data"; 
+                btn.disabled = false; 
+            }, 2000);
+            return;
+        }
+        
+        // Find the specific expand icon inside the row
+        // [cite: 1330] The icon is inside "hsVray _expandableCaret_pq41h_18"
+        const expander = collapsedGroups[i].querySelector('[aria-label="Expand group"]');
+        if (expander) {
+            expander.click(); // Trigger Procore to load the data
+        }
+        i++;
+    }, 300); // 300ms delay to be polite to the server
+}
+
+function updateSidebarUI() {
+    const treeRoot = document.getElementById('pp-tree-content');
+    if (globalDrawings.length > 0 && isSidebarOpen) {
+        buildTree(globalDrawings, globalIds);
+    }
 }
 
 function toggleSidebar() {
     const sidebar = document.getElementById('pp-sidebar');
     isSidebarOpen = !isSidebarOpen;
-    
     if (isSidebarOpen) {
         sidebar.classList.add('open');
-        if (globalDrawings.length > 0) {
-            buildTree(globalDrawings, globalIds);
-        }
+        updateSidebarUI();
     } else {
         sidebar.classList.remove('open');
     }
 }
 
-// --- TREE BUILDER ---
+// --- TREE BUILDING LOGIC ---
 function buildTree(drawings, ids) {
     const treeRoot = document.getElementById('pp-tree-content');
     treeRoot.innerHTML = ''; 
 
+    const validDrawings = drawings.filter(d => d.number || d.drawing_number);
+    if (validDrawings.length === 0) return;
+
     const groups = {};
 
-    drawings.forEach(dwg => {
-        // Handle different field names (number vs drawing_number)
-        const num = dwg.number || dwg.drawing_number || "???";
+    validDrawings.forEach(dwg => {
+        const num = dwg.number || dwg.drawing_number;
         const title = dwg.title || "No Title";
+        const id = dwg.id;
         
-        // Normalize object for display
-        dwg.displayNumber = num;
-        dwg.displayTitle = title;
-
         let disc = dwg.discipline || "General";
         if ((!dwg.discipline) && num) {
             const firstChar = num.charAt(0).toUpperCase();
@@ -143,7 +181,8 @@ function buildTree(drawings, ids) {
             if(map[firstChar]) disc = map[firstChar];
         }
         if (!groups[disc]) groups[disc] = [];
-        groups[disc].push(dwg);
+        
+        groups[disc].push({ num, title, id, raw: dwg });
     });
 
     Object.keys(groups).sort().forEach(discipline => {
@@ -158,12 +197,12 @@ function buildTree(drawings, ids) {
 
         const list = document.createElement('ul');
         
-        // Unit Plans Subfolder
+        // Unit Plan Logic
         const unitPlans = [];
         const otherPlans = [];
 
         groups[discipline].forEach(d => {
-            if (d.displayTitle && d.displayTitle.toUpperCase().includes("UNIT PLAN")) {
+            if (d.title && d.title.toUpperCase().includes("UNIT PLAN")) {
                 unitPlans.push(d);
             } else {
                 otherPlans.push(d);
@@ -190,25 +229,21 @@ function buildTree(drawings, ids) {
 function createDrawingRow(dwg, ids) {
     const li = document.createElement('li');
     li.className = 'drawing-row';
-    let tags = '';
     
-    // Rev check (handle both field names)
-    const rev = dwg.revision_number || dwg.current_revision_id; 
+    let tags = '';
+    const rev = dwg.raw?.revision_number || dwg.raw?.current_revision_id;
     if (rev && parseInt(rev) > 5) {
         tags += `<span class="tag warning">Rev ${rev}</span>`;
     }
-    
-    // ID check
-    const id = dwg.id || dwg.drawing_id;
+
     const pid = ids?.projectId || '3051002';
     const aid = ids?.drawingAreaId || '2532028';
-
-    const linkUrl = `https://app.procore.com/${pid}/project/drawing_areas/${aid}/drawing_log/view_fullscreen/${id}`;
+    const linkUrl = `https://app.procore.com/${pid}/project/drawing_areas/${aid}/drawing_log/view_fullscreen/${dwg.id}`;
 
     li.innerHTML = `
         <a href="${linkUrl}" target="_blank" class="drawing-link">
-            <span class="d-num">${dwg.displayNumber}</span>
-            <span class="d-title">${dwg.displayTitle}</span>
+            <span class="d-num">${dwg.num}</span>
+            <span class="d-title">${dwg.title}</span>
             ${tags}
         </a>
     `;
@@ -216,7 +251,7 @@ function createDrawingRow(dwg, ids) {
 }
 
 function sortDrawings(a, b) {
-    return a.displayNumber.localeCompare(b.displayNumber, undefined, { numeric: true, sensitivity: 'base' });
+    return a.num.localeCompare(b.num, undefined, { numeric: true, sensitivity: 'base' });
 }
 
 function getDisciplineColor(name) {

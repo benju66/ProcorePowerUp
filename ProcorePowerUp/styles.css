@@ -67,6 +67,32 @@
     font-weight: bold;
 }
 
+/* --- Controls Area --- */
+.pp-controls {
+    padding: 10px;
+    border-bottom: 1px solid #eee;
+    background: #fff;
+    text-align: center;
+}
+
+.pp-btn-primary {
+    background: #f47b20; /* Procore Orange */
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+    width: 100%;
+}
+.pp-btn-primary:hover {
+    background: #d66410;
+}
+.pp-btn-primary:disabled {
+    background: #ccc;
+    cursor: wait;
+}
+
 .pp-search-box {
     padding: 10px;
     border-bottom: 1px solid #eee;
@@ -84,6 +110,13 @@
     flex: 1;
     overflow-y: auto;
     padding: 10px;
+}
+
+.empty-state {
+    padding: 20px;
+    text-align: center;
+    color: #666;
+    line-height: 1.5;
 }
 
 /* --- Details / Summary (The Tree) --- */
