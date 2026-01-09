@@ -174,6 +174,7 @@ const PP_UI = {
     contextMenuOpen: false,
 
     async init() {
+        // Prevent re-creating UI on SPA re-init
         if (document.getElementById('pp-toggle-btn')) return;
         
         const prefs = await PP_Store.getPreferences();
@@ -245,7 +246,6 @@ const PP_UI = {
         const searchInput = document.getElementById('pp-search');
         
         // --- OPTIMIZATION 1: DEBOUNCED SEARCH ---
-        // Instead of running on every keystroke, wait until user stops typing
         searchInput.addEventListener('input', PP_Core.debounce(() => {
             PP_UI.filterTree();
         }, 300));
@@ -254,7 +254,6 @@ const PP_UI = {
         searchInput.addEventListener('keydown', (e) => {
             if (e.key === 'ArrowDown') {
                 e.preventDefault();
-                // Scope ONLY to #pp-tree-content
                 const allVisible = Array.from(document.querySelectorAll('#pp-tree-content .pp-drawing-row'))
                     .filter(el => el.offsetParent !== null);
                 
@@ -270,7 +269,7 @@ const PP_UI = {
         
         document.getElementById('pp-new-folder').onclick = (e) => {
             e.preventDefault();
-            e.stopPropagation(); // Prevent toggling the details summary
+            e.stopPropagation();
             const name = prompt("Enter folder name:");
             if(name) PP_Favorites.addFolder(name);
         };
@@ -279,6 +278,18 @@ const PP_UI = {
         document.addEventListener('click', () => {
             const menu = document.getElementById('pp-context-menu');
             if (menu) menu.style.display = 'none';
+        });
+
+        // --- NEW: LISTENER FOR BROWSER ACTION TOGGLE ---
+        chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+            if (msg.action === "TOGGLE_UI") {
+                const btn = document.getElementById('pp-toggle-btn');
+                if (btn) {
+                    // Check computed style to handle initial CSS state
+                    const currentStyle = window.getComputedStyle(btn).display;
+                    btn.style.display = (currentStyle === 'none') ? 'flex' : 'none';
+                }
+            }
         });
     },
 
@@ -598,19 +609,14 @@ const PP_UI = {
                 li.querySelector('a').click();
             } else if (e.key === 'ArrowDown') {
                 e.preventDefault();
-                
-                // Scope ONLY to #pp-tree-content
                 const allVisible = Array.from(document.querySelectorAll('#pp-tree-content .pp-drawing-row'))
                     .filter(el => el.offsetParent !== null);
                 const idx = allVisible.indexOf(li);
-                
                 if (idx > -1 && idx < allVisible.length - 1) {
                     allVisible[idx + 1].focus();
                 }
             } else if (e.key === 'ArrowUp') {
                 e.preventDefault();
-                
-                // Scope ONLY to #pp-tree-content
                 const allVisible = Array.from(document.querySelectorAll('#pp-tree-content .pp-drawing-row'))
                     .filter(el => el.offsetParent !== null);
                 const idx = allVisible.indexOf(li);
@@ -618,7 +624,6 @@ const PP_UI = {
                 if (idx > 0) {
                     allVisible[idx - 1].focus();
                 } else if (idx === 0) {
-                    // Only jump back to search if we are at the very top of the MAIN TREE
                     document.getElementById('pp-search').focus();
                 }
             }
@@ -775,11 +780,16 @@ const PP_Core = {
     cachedDrawings: [], 
     cachedAreaId: null,
     isFlushing: false, 
+    urlWatcherActive: false,
+    reinitTimer: null,
 
     init() {
         PP_UI.init();
         const ids = PP_Core.getIdsFromUrl();
         this.currentProjectId = ids.projectId;
+
+        // Ensure we monitor for SPA changes
+        this.startUrlWatcher();
 
         if (this.currentProjectId) {
             PP_Favorites.init(this.currentProjectId);
@@ -795,6 +805,29 @@ const PP_Core = {
             });
         }
         window.addEventListener("message", PP_Core.handleWiretapMessage);
+    },
+
+    // --- NEW: SPA NAVIGATION WATCHER ---
+    startUrlWatcher() {
+        if (this.urlWatcherActive) return;
+        this.urlWatcherActive = true;
+        
+        let lastUrl = location.href;
+        // Observe body for changes (SPA navigation often updates DOM)
+        // Check URL inside observer to catch navigation
+        const observer = new MutationObserver(() => {
+            const url = location.href;
+            if (url !== lastUrl) {
+                lastUrl = url;
+                // Debounce re-init
+                if (this.reinitTimer) clearTimeout(this.reinitTimer);
+                this.reinitTimer = setTimeout(() => {
+                    console.log("Procore Power-Up: URL changed, refreshing context...");
+                    this.init(); 
+                }, 500);
+            }
+        });
+        observer.observe(document, { subtree: true, childList: true });
     },
 
     // --- UTILITY: DEBOUNCE ---
