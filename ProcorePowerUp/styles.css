@@ -21,10 +21,9 @@
     box-shadow: -2px 2px 5px rgba(0,0,0,0.2);
     user-select: none;
     color: #333;
-    transition: background 0.2s, transform 0.2s; /* Smoother interactions */
+    transition: background 0.2s, transform 0.2s;
 }
 
-/* Wiggle Animation on Hover */
 #pp-toggle-btn:hover {
     background: #e0e0e0;
     animation: pp-wiggle-kframe 0.5s ease-in-out;
@@ -42,18 +41,18 @@
     box-shadow: -2px 0 10px rgba(0,0,0,0.1);
     z-index: 99999;
     transform: translateX(100%); 
-    transition: transform 0.3s cubic-bezier(0.4, 0.0, 0.2, 1); /* Slightly nicer easing */
+    transition: transform 0.3s cubic-bezier(0.4, 0.0, 0.2, 1);
     display: flex;
     flex-direction: column;
     font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     font-size: 13px;
     border-left: 1px solid #ddd;
     color: #333;
-    -webkit-font-smoothing: antialiased; /* Crisp text */
+    -webkit-font-smoothing: antialiased;
 }
 #pp-sidebar.open { transform: translateX(0); }
 
-/* --- CUSTOM SCROLLBARS (New) --- */
+/* --- CUSTOM SCROLLBARS --- */
 #pp-sidebar ::-webkit-scrollbar {
     width: 6px;
     height: 6px;
@@ -84,7 +83,7 @@
     background: rgba(244, 123, 32, 0.5); 
 }
 
-/* --- Header & Sections --- */
+/* --- Header & Progress Bar --- */
 .pp-header {
     padding: 15px;
     background: #f8f9fa;
@@ -94,17 +93,51 @@
     align-items: center;
     flex-shrink: 0;
     position: relative;
-    z-index: 2; /* Ensure it stays above scrolling content */
+    z-index: 2;
 }
 .pp-header h3 { margin: 0; font-size: 16px; color: #333; font-weight: 700; }
 .pp-close-btn { cursor: pointer; font-size: 20px; font-weight: bold; color: #666; transition: color 0.2s; }
 .pp-close-btn:hover { color: #000; }
 
+/* VISUAL PROGRESS BAR */
+#pp-progress-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    background: #f47b20;
+    width: 0%;
+    transition: width 0.3s ease;
+    z-index: 10;
+}
+
+/* --- Search & Section Titles --- */
+.pp-search-box { 
+    padding: 10px; 
+    background: #fff; 
+    flex-shrink: 0; 
+    border-bottom: 1px solid #eee; 
+}
+.pp-search-box input { 
+    width: 95%; 
+    width: -webkit-fill-available;
+    padding: 8px; 
+    border: 1px solid #ccc; 
+    border-radius: 4px; 
+    font-size: 12px;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    outline: none;
+}
+.pp-search-box input:focus {
+    border-color: #f47b20;
+    box-shadow: 0 0 0 2px rgba(244, 123, 32, 0.1);
+}
+
 .pp-section-title {
     padding: 10px 15px;
     background: #f1f1f1;
     font-weight: bold;
-    font-size: 11px; /* Slightly smaller for 'label' feel */
+    font-size: 11px;
     color: #555;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -114,6 +147,7 @@
     border-bottom: 1px solid #e0e0e0;
     border-top: 1px solid #eee; 
     flex-shrink: 0;
+    cursor: pointer;
 }
 
 .pp-icon-btn {
@@ -127,7 +161,12 @@
 }
 .pp-icon-btn:hover { color: #d66410; transform: scale(1.2); }
 
-/* --- Favorites --- */
+/* --- Recents & Favorites Lists --- */
+.pp-simple-list {
+    max-height: 150px;
+    overflow-y: auto;
+    background: #fff;
+}
 .pp-fav-container {
     max-height: 25%;
     overflow-y: auto;
@@ -135,12 +174,9 @@
     background: #fafafa;
     flex-shrink: 0;
 }
-.pp-fav-empty { padding: 15px; text-align: center; color: #999; font-style: italic; font-size: 11px; }
+.pp-fav-empty { padding: 15px; text-align: center; color: #ccc; font-style: italic; font-size: 11px; }
 
-.pp-fav-folder {
-    margin-bottom: 0;
-    border-bottom: 1px solid #eee;
-}
+.pp-fav-folder { margin-bottom: 0; border-bottom: 1px solid #eee; }
 #pp-sidebar .pp-fav-folder summary {
     background: #fff;
     padding: 8px 15px;
@@ -154,12 +190,7 @@
 .pp-folder-name { font-weight: 600; color: #444; }
 .pp-del-folder { color: #ccc; cursor: pointer; font-weight: bold; font-size: 14px; transition: color 0.2s; }
 .pp-del-folder:hover { color: #e74c3c; }
-
-/* Drag Drop States */
-.pp-fav-folder.drag-over {
-    background: #e6f7ff !important; /* Force override */
-    border: 2px dashed #007bff;
-}
+.pp-fav-folder.drag-over { background: #e6f7ff !important; border: 2px dashed #007bff; }
 
 .pp-fav-item {
     display: flex;
@@ -172,18 +203,32 @@
 .pp-del-item:hover { color: #e74c3c; }
 .pp-missing { color: #999; font-style: italic; }
 
-/* --- Footer Area (Controls + Text) --- */
+/* --- Main Tree Content --- */
+.pp-content { flex: 1; overflow-y: auto; padding: 10px; }
+.pp-empty-state { padding: 20px; text-align: center; color: #666; line-height: 1.5; }
+
+/* SKELETON LOADING */
+.pp-skeleton-row {
+    height: 16px;
+    margin: 10px 0;
+    background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+    background-size: 200% 100%;
+    animation: pp-skeleton-load 1.5s infinite;
+    border-radius: 4px;
+}
+@keyframes pp-skeleton-load {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* --- Footer Area --- */
 .pp-footer-container {
     border-top: 1px solid #eee;
     background: #fff;
     flex-shrink: 0;
     z-index: 2;
 }
-
-.pp-controls {
-    padding: 10px 10px 5px 10px;
-    text-align: center;
-}
+.pp-controls { padding: 10px 10px 5px 10px; text-align: center; }
 .pp-btn-primary {
     background: #f47b20;
     color: white;
@@ -199,38 +244,10 @@
 .pp-btn-primary:hover { background: #d66410; }
 .pp-btn-primary:active { transform: scale(0.98); }
 .pp-btn-primary:disabled { background: #ccc; cursor: wait; }
-
-/* --- Main Tree Content --- */
-.pp-search-box { 
-    padding: 10px; 
-    background: #fff; 
-    flex-shrink: 0; 
-    border-bottom: 1px solid #eee; /* Added separator */
-}
-.pp-search-box input { 
-    width: 95%; /* fallback */
-    width: -webkit-fill-available;
-    padding: 8px; 
-    border: 1px solid #ccc; 
-    border-radius: 4px; 
-    font-size: 12px;
-    transition: border-color 0.2s, box-shadow 0.2s;
-    outline: none;
-}
-/* Orange highlight on focus */
-.pp-search-box input:focus {
-    border-color: #f47b20;
-    box-shadow: 0 0 0 2px rgba(244, 123, 32, 0.1);
-}
-
-.pp-content { flex: 1; overflow-y: auto; padding: 10px; }
-.pp-empty-state { padding: 20px; text-align: center; color: #666; line-height: 1.5; }
-
-/* --- Footer --- */
 .pp-footer {
     padding: 5px 10px 10px 10px;
     background: #fff;
-    font-size: 10px; /* Slightly smaller */
+    font-size: 10px;
     color: #999;
     text-align: center;
 }
@@ -260,10 +277,27 @@
 }
 #pp-sidebar details[open] > summary:before { transform: rotate(90deg); }
 
-#pp-sidebar ul { list-style: none; padding-left: 20px; margin: 0; }
+/* SMOOTH ACCORDION (Max-Height Trick) */
+#pp-sidebar details > ul { 
+    list-style: none; 
+    padding-left: 20px; 
+    margin: 0; 
+    overflow: hidden; 
+    /* Simple transition setup - real height animation requires JS or max-height guessing */
+}
 
-.pp-drawing-row { margin: 2px 0; cursor: grab; }
+.pp-drawing-row { 
+    margin: 2px 0; 
+    cursor: grab; 
+    outline: none; /* remove default browser outline */
+}
 .pp-drawing-row:active { cursor: grabbing; }
+/* KEYBOARD FOCUS STATE */
+.pp-drawing-row:focus-within {
+    background: #fff3e0;
+    border-radius: 3px;
+    box-shadow: inset 2px 0 0 #f47b20;
+}
 
 .pp-drawing-link {
     display: flex;
@@ -279,6 +313,54 @@
 .pp-d-num { font-weight: 700; min-width: 60px; margin-right: 10px; flex-shrink: 0; }
 .pp-d-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #555; }
 
+/* "SQUEEZE" Filter Animation */
+.squeeze-out {
+    transform: scale(0.9);
+    opacity: 0;
+    height: 0;
+    margin: 0;
+    overflow: hidden;
+    transition: all 0.2s ease-out;
+}
+
+/* --- Drag Ghost --- */
+.pp-drag-ghost {
+    position: absolute;
+    top: -9999px;
+    left: -9999px;
+    background: #f47b20;
+    color: white;
+    padding: 5px 10px;
+    border-radius: 15px;
+    font-weight: bold;
+    font-size: 12px;
+    z-index: 100000;
+}
+
+/* --- Context Menu --- */
+.pp-context-menu {
+    position: fixed;
+    z-index: 100001;
+    background: white;
+    border: 1px solid #ccc;
+    box-shadow: 2px 2px 10px rgba(0,0,0,0.2);
+    border-radius: 4px;
+    padding: 5px 0;
+    min-width: 150px;
+    display: none;
+    font-size: 12px;
+}
+.pp-context-menu li {
+    padding: 8px 15px;
+    cursor: pointer;
+    list-style: none;
+    color: #333;
+}
+.pp-context-menu li:hover {
+    background: #f0f0f0;
+    color: #000;
+}
+
 /* --- Colors & Tags --- */
 .pp-disc-tag {
     display: inline-block;
@@ -293,6 +375,14 @@
     font-weight: bold;
     flex-shrink: 0;
 }
+.pp-disc-tag.interactive {
+    cursor: pointer;
+    transition: transform 0.1s, opacity 0.2s;
+}
+.pp-disc-tag.interactive:hover {
+    transform: scale(1.1);
+    opacity: 0.9;
+}
 .c-red { background-color: #e74c3c; } 
 .c-blue { background-color: #3498db; } 
 .c-green { background-color: #27ae60; } 
@@ -304,30 +394,20 @@
 /* ============================================================
    HAPPY ANIMATIONS
    ============================================================ */
-
-/* 1. The Success Pop */
 @keyframes pp-pop-kframe {
     0% { transform: scale(1); }
     50% { transform: scale(1.05); background-color: #27ae60; }
     100% { transform: scale(1); }
 }
+.pp-pop { animation: pp-pop-kframe 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
 
-.pp-pop {
-    animation: pp-pop-kframe 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-}
-
-/* 2. The Folder Gulp */
 @keyframes pp-gulp-kframe {
     0% { transform: scale(1); }
     50% { transform: scale(1.02); background-color: #e8f5e9; border-color: #27ae60; }
     100% { transform: scale(1); background-color: transparent; }
 }
+.pp-gulp { animation: pp-gulp-kframe 0.5s ease-out; }
 
-.pp-gulp {
-    animation: pp-gulp-kframe 0.5s ease-out;
-}
-
-/* 3. The Toggle Wiggle */
 @keyframes pp-wiggle-kframe {
     0% { transform: rotate(0deg); }
     25% { transform: rotate(-10deg); }

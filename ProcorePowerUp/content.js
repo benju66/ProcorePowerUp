@@ -22,7 +22,6 @@ const PP_Store = {
             drawingAreaId: areaId,
             drawings: leanDrawings
         };
-        // Wrap in promise for await compatibility if needed, though chrome.storage is async
         return new Promise((resolve) => {
             chrome.storage.local.set({ [key]: payload }, () => resolve(payload));
         });
@@ -50,7 +49,7 @@ const PP_Store = {
         });
     },
 
-    // --- FAVORITES STORAGE ---
+    // --- FAVORITES & RECENTS ---
     async getFavorites(projectId) {
         if (!projectId) return [];
         const key = `pp_favs_${projectId}`;
@@ -63,6 +62,20 @@ const PP_Store = {
         if (!projectId) return;
         const key = `pp_favs_${projectId}`;
         chrome.storage.local.set({ [key]: folders });
+    },
+
+    async getRecents(projectId) {
+        if (!projectId) return [];
+        const key = `pp_recents_${projectId}`;
+        return new Promise(resolve => {
+            chrome.storage.local.get([key], res => resolve(res[key] || []));
+        });
+    },
+
+    async saveRecents(projectId, recents) {
+        if (!projectId) return;
+        const key = `pp_recents_${projectId}`;
+        chrome.storage.local.set({ [key]: recents });
     },
 
     async getPreferences() {
@@ -83,7 +96,7 @@ const PP_Store = {
 };
 
 // ==========================================
-// MODULE: FAVORITES LOGIC
+// MODULE: FAVORITES & RECENTS LOGIC
 // ==========================================
 const PP_Favorites = {
     folders: [], 
@@ -97,7 +110,7 @@ const PP_Favorites = {
         if (!name) return;
         this.folders.push({
             id: Date.now(),
-            name: name, // Plain text storage
+            name: name, 
             drawings: []
         });
         this.save();
@@ -133,12 +146,32 @@ const PP_Favorites = {
     }
 };
 
+const PP_Recents = {
+    items: [], // Array of drawing Numbers
+
+    async init(projectId) {
+        this.items = await PP_Store.getRecents(projectId);
+        PP_UI.renderRecents();
+    },
+
+    add(drawingNum) {
+        // Remove if exists, add to top, limit to 5
+        this.items = this.items.filter(n => n !== drawingNum);
+        this.items.unshift(drawingNum);
+        if (this.items.length > 5) this.items.pop();
+        
+        PP_Store.saveRecents(PP_Core.currentProjectId, this.items);
+        PP_UI.renderRecents();
+    }
+};
+
 // ==========================================
 // MODULE: UI
 // ==========================================
 const PP_UI = {
     isOpen: false,
-    dragSrc: null,
+    activeDisciplineFilter: null,
+    contextMenuOpen: false,
 
     async init() {
         if (document.getElementById('pp-toggle-btn')) return;
@@ -164,24 +197,31 @@ const PP_UI = {
         sidebar.id = 'pp-sidebar';
         if (prefs.sidebarWidth) sidebar.style.width = `${prefs.sidebarWidth}px`;
 
-        // --- UPDATED LAYOUT STRUCTURE ---
         sidebar.innerHTML = `
             <div id="pp-resizer"></div> 
             
             <div class="pp-header">
                 <h3>Procore Power-Up</h3>
                 <span class="pp-close-btn" id="pp-close">&times;</span>
+                <div id="pp-progress-bar"></div>
             </div>
             
             <div class="pp-search-box">
-                <input type="text" id="pp-search" placeholder="Filter all drawings...">
+                <input type="text" id="pp-search" placeholder="Filter drawings... ( ↓ to nav )">
             </div>
 
-            <div class="pp-section-title">
-                <span>⭐ Favorites</span>
-                <button id="pp-new-folder" class="pp-icon-btn" title="New Folder">+</button>
-            </div>
-            <div id="pp-favorites-list" class="pp-fav-container"></div>
+            <details id="pp-recents-group" style="display:none" open>
+                <summary class="pp-section-title"><span>🕒 Recent</span></summary>
+                <div id="pp-recents-list" class="pp-simple-list"></div>
+            </details>
+
+            <details id="pp-favorites-group" open>
+                <summary class="pp-section-title">
+                    <span>⭐ Favorites</span>
+                    <button id="pp-new-folder" class="pp-icon-btn" title="New Folder">+</button>
+                </summary>
+                <div id="pp-favorites-list" class="pp-fav-container"></div>
+            </details>
 
             <div id="pp-tree-content" class="pp-content"></div>
 
@@ -191,6 +231,10 @@ const PP_UI = {
                 </div>
                 <div class="pp-footer" id="pp-footer"></div>
             </div>
+            
+            <div id="pp-drag-ghost" class="pp-drag-ghost"></div>
+            
+            <ul id="pp-context-menu" class="pp-context-menu"></ul>
         `;
         document.body.appendChild(sidebar);
 
@@ -198,13 +242,57 @@ const PP_UI = {
 
         // Events
         document.getElementById('pp-close').onclick = () => PP_Core.toggleSidebar();
-        document.getElementById('pp-search').addEventListener('input', PP_UI.filterTree);
+        const searchInput = document.getElementById('pp-search');
+        
+        // Search & Keyboard Nav
+        searchInput.addEventListener('input', PP_UI.filterTree);
+        searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                // Focus the very first visible row in the document
+                const firstRow = document.querySelector('.pp-drawing-row:not([style*="display: none"])');
+                if (firstRow) firstRow.focus();
+            }
+        });
+
         document.getElementById('pp-load-all').addEventListener('click', PP_Core.triggerLoadAll);
         
-        document.getElementById('pp-new-folder').onclick = () => {
+        document.getElementById('pp-new-folder').onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation(); // Prevent toggling the details summary
             const name = prompt("Enter folder name:");
             if(name) PP_Favorites.addFolder(name);
         };
+
+        // Close context menu on global click
+        document.addEventListener('click', () => {
+            const menu = document.getElementById('pp-context-menu');
+            if (menu) menu.style.display = 'none';
+        });
+    },
+
+    // --- RECENTS RENDERING ---
+    renderRecents() {
+        const container = document.getElementById('pp-recents-list');
+        const group = document.getElementById('pp-recents-group');
+        
+        if (!PP_Recents.items || PP_Recents.items.length === 0) {
+            group.style.display = 'none';
+            return;
+        }
+
+        group.style.display = 'block';
+        container.innerHTML = '';
+        
+        const ul = document.createElement('ul');
+        PP_Recents.items.forEach(num => {
+            const fullData = PP_Core.getDrawingByNum(num);
+            if (fullData) {
+                const li = PP_UI.createDrawingRow(fullData, PP_Core.currentProjectId, PP_Core.cachedAreaId, true);
+                ul.appendChild(li);
+            }
+        });
+        container.appendChild(ul);
     },
 
     // --- FAVORITES RENDERING ---
@@ -213,7 +301,8 @@ const PP_UI = {
         container.innerHTML = '';
 
         if (PP_Favorites.folders.length === 0) {
-            container.innerHTML = `<div class="pp-fav-empty">Create folders to organize drawings. Drag & Drop from the list below!</div>`;
+            // Clean empty state (Removed bulky text)
+            container.innerHTML = `<div class="pp-fav-empty">No folders yet.</div>`;
             return;
         }
 
@@ -223,16 +312,12 @@ const PP_UI = {
             folderEl.open = true;
 
             // Drag Drop Targets
-            folderEl.ondragover = (e) => {
-                e.preventDefault();
-                folderEl.classList.add('drag-over');
-            };
+            folderEl.ondragover = (e) => { e.preventDefault(); folderEl.classList.add('drag-over'); };
             folderEl.ondragleave = () => folderEl.classList.remove('drag-over');
             folderEl.ondrop = (e) => {
                 e.preventDefault();
                 folderEl.classList.remove('drag-over');
                 const num = e.dataTransfer.getData("text/plain");
-                
                 if (num) {
                     const added = PP_Favorites.addDrawingToFolder(folder.id, num);
                     if (added !== false) { 
@@ -242,12 +327,10 @@ const PP_UI = {
                 }
             };
 
-            // Summary (Header) - SECURITY FIX: No innerHTML for name
             const summary = document.createElement('summary');
-            
             const nameSpan = document.createElement('span');
             nameSpan.className = 'pp-folder-name';
-            nameSpan.textContent = folder.name; // Safe injection
+            nameSpan.textContent = folder.name;
             
             const delBtn = document.createElement('span');
             delBtn.className = 'pp-del-folder';
@@ -262,7 +345,6 @@ const PP_UI = {
             summary.appendChild(delBtn);
             folderEl.appendChild(summary);
 
-            // List
             const list = document.createElement('ul');
             folder.drawings.forEach(num => {
                 const fullData = PP_Core.getDrawingByNum(num);
@@ -274,6 +356,7 @@ const PP_UI = {
                     a.href = PP_Core.getDrawingUrl(fullData.id);
                     a.target = "_blank";
                     a.textContent = `${num} - ${fullData.title}`;
+                    a.onclick = () => PP_Recents.add(num); // Track Recent
                     li.appendChild(a);
                 } else {
                     li.innerHTML = `<span class="pp-missing">${num} (Need Scan)</span>`;
@@ -294,11 +377,16 @@ const PP_UI = {
     },
 
     // --- MAIN TREE RENDERING ---
-    updateLoadButton(text, disabled) {
+    updateLoadButton(text, disabled, progressPercent = 0) {
         const btn = document.getElementById('pp-load-all');
+        const bar = document.getElementById('pp-progress-bar');
         if (btn) {
             btn.innerText = text;
             btn.disabled = disabled;
+        }
+        if (bar) {
+            bar.style.width = `${progressPercent}%`;
+            bar.style.opacity = progressPercent > 0 && progressPercent < 100 ? 1 : 0;
         }
     },
 
@@ -365,7 +453,12 @@ const PP_UI = {
         const footer = document.getElementById('pp-footer');
         
         if (stateType === 'LOADING') {
-            treeRoot.innerHTML = `<div class="pp-empty-state"><p>Loading...</p></div>`;
+            treeRoot.innerHTML = `
+                <div class="pp-skeleton-row"></div>
+                <div class="pp-skeleton-row" style="width: 80%"></div>
+                <div class="pp-skeleton-row" style="width: 90%"></div>
+                <div class="pp-skeleton-row" style="width: 70%"></div>
+            `;
         } else if (stateType === 'EMPTY') {
             treeRoot.innerHTML = `<div class="pp-empty-state"><p><strong>No drawings found.</strong></p><p>Please <b>Refresh the Page</b> to capture discipline names, then click "Scan Project Data".</p></div>`;
             footer.innerText = "";
@@ -375,6 +468,7 @@ const PP_UI = {
 
             PP_UI.buildTree(payload.drawings, payload.map, payload.projectId, payload.drawingAreaId);
             PP_UI.renderFavorites(); 
+            PP_UI.renderRecents();
             const dateStr = new Date(payload.timestamp).toLocaleString();
             footer.innerText = `Last updated: ${dateStr}`;
         }
@@ -429,13 +523,27 @@ const PP_UI = {
             const group = groups[discipline];
             const discContainer = document.createElement('details');
             discContainer.open = false; 
+            discContainer.dataset.discipline = discipline; // For filtering
             
+            // Check Interactive Filter
+            if (PP_UI.activeDisciplineFilter && PP_UI.activeDisciplineFilter !== discipline) {
+                discContainer.style.display = 'none';
+            }
+
             const colorClass = PP_UI.getDisciplineColor(discipline);
             
             const summary = document.createElement('summary');
             const tagSpan = document.createElement('span');
-            tagSpan.className = `pp-disc-tag ${colorClass}`;
+            tagSpan.className = `pp-disc-tag ${colorClass} interactive`;
             tagSpan.textContent = discipline.charAt(0);
+            tagSpan.title = "Click to Filter/Unfilter";
+            
+            // INTERACTIVE BADGE CLICK
+            tagSpan.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                PP_UI.toggleDisciplineFilter(discipline);
+            };
             
             const textNode = document.createTextNode(` ${discipline} (${group.items.length})`);
             
@@ -453,15 +561,73 @@ const PP_UI = {
         });
     },
 
-    createDrawingRow(dwg, projectId, areaId) {
+    toggleDisciplineFilter(discipline) {
+        const searchInput = document.getElementById('pp-search');
+        if (PP_UI.activeDisciplineFilter === discipline) {
+            PP_UI.activeDisciplineFilter = null; // Clear filter
+            searchInput.placeholder = "Filter all drawings...";
+        } else {
+            PP_UI.activeDisciplineFilter = discipline;
+            searchInput.placeholder = `Filtered: ${discipline}`;
+            // Clear text search to avoid confusion
+            searchInput.value = '';
+        }
+        
+        // Re-run filter logic
+        PP_UI.filterTree();
+    },
+
+    createDrawingRow(dwg, projectId, areaId, isRecent = false) {
         const li = document.createElement('li');
         li.className = 'pp-drawing-row';
+        li.tabIndex = 0; // ENABLE KEYBOARD FOCUS
         
+        // --- IMPROVED KEYBOARD NAVIGATION ---
+        li.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                li.querySelector('a').click();
+            } else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                // Find ALL currently visible rows across all sections
+                const allVisible = Array.from(document.querySelectorAll('.pp-drawing-row'))
+                    .filter(el => el.offsetParent !== null); // Standard check for visibility
+                const idx = allVisible.indexOf(li);
+                
+                if (idx > -1 && idx < allVisible.length - 1) {
+                    allVisible[idx + 1].focus();
+                }
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                // Find ALL currently visible rows
+                const allVisible = Array.from(document.querySelectorAll('.pp-drawing-row'))
+                    .filter(el => el.offsetParent !== null);
+                const idx = allVisible.indexOf(li);
+
+                if (idx > 0) {
+                    allVisible[idx - 1].focus();
+                } else {
+                    document.getElementById('pp-search').focus();
+                }
+            }
+        });
+
+        // DRAG AND DROP - CUSTOM GHOST
         li.draggable = true;
         li.ondragstart = (e) => {
             e.dataTransfer.setData("text/plain", dwg.num);
             e.dataTransfer.effectAllowed = "copy";
+            
+            // Create Ghost
+            const ghost = document.getElementById('pp-drag-ghost');
+            ghost.textContent = dwg.num;
+            e.dataTransfer.setDragImage(ghost, 0, 0);
         };
+
+        // CONTEXT MENU (Quick Add)
+        li.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            PP_UI.showContextMenu(e.clientX, e.clientY, dwg.num);
+        });
 
         if (!projectId || !areaId) {
             const errSpan = document.createElement('span');
@@ -477,6 +643,7 @@ const PP_UI = {
         a.href = linkUrl;
         a.target = "_blank";
         a.className = 'pp-drawing-link';
+        a.onclick = () => PP_Recents.add(dwg.num); // Track Click
 
         const spanNum = document.createElement('span');
         spanNum.className = 'pp-d-num';
@@ -491,6 +658,32 @@ const PP_UI = {
         li.appendChild(a);
 
         return li;
+    },
+
+    showContextMenu(x, y, drawingNum) {
+        const menu = document.getElementById('pp-context-menu');
+        menu.innerHTML = '';
+        menu.style.top = `${y}px`;
+        menu.style.left = `${x}px`;
+        menu.style.display = 'block';
+
+        if (PP_Favorites.folders.length === 0) {
+            const li = document.createElement('li');
+            li.textContent = "No folders created";
+            li.style.color = "#999";
+            menu.appendChild(li);
+        } else {
+            PP_Favorites.folders.forEach(folder => {
+                const li = document.createElement('li');
+                li.textContent = `Add to: ${folder.name}`;
+                li.onclick = () => {
+                    const added = PP_Favorites.addDrawingToFolder(folder.id, drawingNum);
+                    if(added) alert(`Added ${drawingNum} to ${folder.name}`);
+                    else alert("Already in folder");
+                };
+                menu.appendChild(li);
+            });
+        }
     },
 
     sortDrawings(a, b) {
@@ -513,27 +706,40 @@ const PP_UI = {
         const term = document.getElementById('pp-search').value.toLowerCase().trim();
         const sections = document.querySelectorAll('#pp-tree-content details');
 
-        if (!term) {
-            sections.forEach(section => {
+        sections.forEach(section => {
+            // Logic 1: Discipline Filter
+            const discName = section.dataset.discipline;
+            if (PP_UI.activeDisciplineFilter && PP_UI.activeDisciplineFilter !== discName) {
+                section.style.display = 'none';
+                return;
+            }
+
+            // Logic 2: Search Term
+            if (!term) {
                 section.style.display = ''; 
                 section.open = false;
-                section.querySelectorAll('.pp-drawing-row').forEach(row => row.style.display = '');
-            });
-            return;
-        }
+                section.querySelectorAll('.pp-drawing-row').forEach(row => {
+                    row.style.display = '';
+                    row.classList.remove('squeeze-out'); // Remove squeeze
+                });
+                return;
+            }
 
-        sections.forEach(section => {
             let hasMatch = false;
             const rows = section.querySelectorAll('.pp-drawing-row');
             rows.forEach(row => {
                 const text = row.textContent.toLowerCase();
                 if (text.includes(term)) {
                     row.style.display = ''; 
+                    row.classList.remove('squeeze-out');
                     hasMatch = true;
                 } else {
-                    row.style.display = 'none'; 
+                    // SQUEEZE ANIMATION
+                    row.classList.add('squeeze-out');
+                    setTimeout(() => { if(row.classList.contains('squeeze-out')) row.style.display = 'none'; }, 200);
                 }
             });
+
             if (hasMatch) {
                 section.style.display = '';
                 section.open = true; 
@@ -555,7 +761,7 @@ const PP_Core = {
     isScanning: false,
     cachedDrawings: [], 
     cachedAreaId: null,
-    isFlushing: false, // RACE CONDITION FIX
+    isFlushing: false, 
 
     init() {
         PP_UI.init();
@@ -564,6 +770,7 @@ const PP_Core = {
 
         if (this.currentProjectId) {
             PP_Favorites.init(this.currentProjectId);
+            PP_Recents.init(this.currentProjectId);
 
             PP_Store.getProjectData(this.currentProjectId).then(res => {
                 this.currentMap = res.map;
@@ -601,7 +808,6 @@ const PP_Core = {
     },
 
     async handleWiretapMessage(event) {
-        // SECURITY UPDATE: Check origin
         if (event.origin !== window.location.origin) return;
         if (event.source !== window || event.data.type !== 'PP_DATA') return;
         
@@ -611,7 +817,7 @@ const PP_Core = {
         if (!activeProjectId) return;
 
         const newMap = {};
-        PP_Core.findDisciplinesRecursive(rawData, newMap, 0, 0); // Added depth param
+        PP_Core.findDisciplinesRecursive(rawData, newMap, 0, 0); 
         if (Object.keys(newMap).length > 0) {
             PP_Core.currentMap = { ...PP_Core.currentMap, ...newMap };
             PP_Store.saveDisciplineMap(activeProjectId, PP_Core.currentMap);
@@ -620,7 +826,8 @@ const PP_Core = {
         const foundDrawings = PP_Core.findDrawingsInObject(rawData);
         if (foundDrawings.length > 0) {
             PP_Core.dataBuffer.push(...foundDrawings);
-            if (PP_Core.isScanning) PP_UI.updateLoadButton(`Scanning... (${PP_Core.dataBuffer.length} pending)`, true);
+            // Update button but keep progress bar indeterminate or pulsing if needed
+            if (PP_Core.isScanning) PP_UI.updateLoadButton(`Scanning... (${PP_Core.dataBuffer.length} pending)`, true, 50);
             if (PP_Core.debounceTimer) clearTimeout(PP_Core.debounceTimer);
             PP_Core.debounceTimer = setTimeout(() => {
                 PP_Core.flushBuffer(activeProjectId, ids);
@@ -633,7 +840,7 @@ const PP_Core = {
         PP_Core.isFlushing = true;
         
         try {
-            PP_UI.updateLoadButton("Processing...", true);
+            PP_UI.updateLoadButton("Processing...", true, 80);
 
             const currentCache = await PP_Store.getProjectData(activeProjectId);
             let merged = currentCache.data ? currentCache.data.drawings : [];
@@ -658,7 +865,7 @@ const PP_Core = {
                 PP_UI.renderState('DATA', { ...saved, map: PP_Core.currentMap, projectId: activeProjectId });
             }
 
-            PP_UI.updateLoadButton("Done!", false);
+            PP_UI.updateLoadButton("Done!", false, 100);
             
             const btn = document.getElementById('pp-load-all');
             if (btn) {
@@ -666,13 +873,12 @@ const PP_Core = {
                 setTimeout(() => btn.classList.remove('pp-pop'), 500);
             }
             
-            setTimeout(() => PP_UI.updateLoadButton("🔄 Scan Project Data", false), 3000); 
+            setTimeout(() => PP_UI.updateLoadButton("🔄 Scan Project Data", false, 0), 3000); 
             PP_Core.isScanning = false;
         } catch(err) {
             console.error("PP: Flush failed", err);
         } finally {
             PP_Core.isFlushing = false;
-            // Catch any stragglers that arrived during async save
             if (PP_Core.dataBuffer.length > 0) {
                  setTimeout(() => PP_Core.flushBuffer(activeProjectId, ids), 500);
             }
@@ -680,7 +886,7 @@ const PP_Core = {
     },
 
     findDisciplinesRecursive(obj, map, sortCounter, depth) {
-        if (depth > 5) return; // Prevent deep recursion freezing
+        if (depth > 5) return; 
         if (!obj || typeof obj !== 'object') return;
         
         if (obj.id && obj.name && typeof obj.name === 'string' && !obj.drawing_number && !obj.number) {
@@ -693,7 +899,6 @@ const PP_Core = {
         } else {
             for (const key in obj) {
                 if (Object.prototype.hasOwnProperty.call(obj, key)) {
-                    // Skip massive metadata keys
                     if (['permissions', 'metadata', 'view_options'].includes(key)) continue;
                     PP_Core.findDisciplinesRecursive(obj[key], map, sortCounter, depth + 1);
                 }
@@ -762,12 +967,12 @@ const PP_Core = {
 
         const expandAllBtn = document.querySelector('.expand-button'); 
         PP_Core.isScanning = true;
-        PP_UI.updateLoadButton("⏳ Initializing Scan...", true); 
+        PP_UI.updateLoadButton("⏳ Initializing Scan...", true, 10); 
         
         if (expandAllBtn) {
             const ariaLabel = expandAllBtn.getAttribute('aria-label') || "";
             if (ariaLabel.toLowerCase().includes('close')) {
-                PP_UI.updateLoadButton("Resetting View...", true);
+                PP_UI.updateLoadButton("Resetting View...", true, 15);
                 expandAllBtn.click(); 
                 await new Promise(r => setTimeout(r, 800)); 
                 expandAllBtn.click(); 
@@ -795,7 +1000,8 @@ const PP_Core = {
             const clientHeight = scrollTarget === window ? window.innerHeight : scrollTarget.clientHeight;
 
             const progress = Math.min(Math.floor((scrollTop / scrollHeight) * 100), 99);
-            PP_UI.updateLoadButton(`Scanning... ${progress}%`, true);
+            // VISUAL PROGRESS BAR UPDATE
+            PP_UI.updateLoadButton(`Scanning... ${progress}%`, true, progress);
 
             if ((clientHeight + scrollTop) >= scrollHeight - 100) {
                 if (scrollHeight > lastHeight) {
@@ -809,7 +1015,7 @@ const PP_Core = {
                     clearInterval(scroller);
                     if (scrollTarget === window) window.scrollTo(0, 0);
                     else scrollTarget.scrollTop = 0;
-                    PP_UI.updateLoadButton("Processing Final Data...", true);
+                    PP_UI.updateLoadButton("Processing Final Data...", true, 99);
                 }
             }
         }, 400); 
