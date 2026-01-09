@@ -283,32 +283,95 @@
     padding-left: 20px; 
     margin: 0; 
     overflow: hidden; 
-    /* Simple transition setup - real height animation requires JS or max-height guessing */
 }
 
 .pp-drawing-row { 
     margin: 2px 0; 
     cursor: grab; 
     outline: none; /* remove default browser outline */
+    display: flex;
+    align-items: center;
+    border-radius: 3px;
+    transition: background 0.1s;
 }
 .pp-drawing-row:active { cursor: grabbing; }
-/* KEYBOARD FOCUS STATE */
+
+/* KEYBOARD FOCUS STATE (Active) */
 .pp-drawing-row:focus-within {
-    background: #fff3e0;
-    border-radius: 3px;
+    background: #fff3e0; /* The orange background */
     box-shadow: inset 2px 0 0 #f47b20;
 }
+
+/* --- STATUS DOT (Hidden by default) --- */
+.pp-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: #eee;
+    border: 1px solid #ccc;
+    margin-right: 8px;
+    cursor: pointer;
+    flex-shrink: 0;
+    opacity: 0; /* HIDDEN DEFAULT */
+    transition: opacity 0.2s, transform 0.2s;
+}
+
+/* Show dot on Hover OR if it has a color set? 
+   User asked for 'only appears on hover', so: */
+.pp-drawing-row:hover .pp-status-dot {
+    opacity: 1;
+}
+
+.pp-status-dot:hover {
+    transform: scale(1.4);
+    border-color: #999;
+}
+
+/* --- TEXT COLORS & DOT COLORS --- */
+/* We style the LI, then trickle down to dot and text */
+
+/* 1. GREEN */
+.pp-row-green .pp-status-dot { background-color: #2ecc71; border-color: #27ae60; opacity: 1; /* Keep dot visible if set? Optional. User said only hover. let's stick to hover only for cleaner look */ opacity: 0; }
+.pp-drawing-row.pp-row-green:hover .pp-status-dot { opacity: 1; }
+.pp-row-green .pp-d-num, .pp-row-green .pp-d-title { color: #1e8449; font-weight: 600; } /* Dark Green Text */
+
+/* 2. RED */
+.pp-row-red .pp-status-dot { background-color: #e74c3c; border-color: #c0392b; opacity: 0; }
+.pp-drawing-row.pp-row-red:hover .pp-status-dot { opacity: 1; }
+.pp-row-red .pp-d-num, .pp-row-red .pp-d-title { color: #c0392b; font-weight: 600; } /* Dark Red Text */
+
+/* 3. YELLOW (Dark Gold for readability) */
+.pp-row-yellow .pp-status-dot { background-color: #f1c40f; border-color: #f39c12; opacity: 0; }
+.pp-drawing-row.pp-row-yellow:hover .pp-status-dot { opacity: 1; }
+.pp-row-yellow .pp-d-num, .pp-row-yellow .pp-d-title { color: #b7950b; font-weight: 600; } /* Dark Gold Text */
+
+/* 4. BLUE */
+.pp-row-blue .pp-status-dot { background-color: #3498db; border-color: #2980b9; opacity: 0; }
+.pp-drawing-row.pp-row-blue:hover .pp-status-dot { opacity: 1; }
+.pp-row-blue .pp-d-num, .pp-row-blue .pp-d-title { color: #2874a6; font-weight: 600; } /* Dark Blue Text */
+
+/* 5. ORANGE */
+.pp-row-orange .pp-status-dot { background-color: #e67e22; border-color: #d35400; opacity: 0; }
+.pp-drawing-row.pp-row-orange:hover .pp-status-dot { opacity: 1; }
+.pp-row-orange .pp-d-num, .pp-row-orange .pp-d-title { color: #ba4a00; font-weight: 600; } /* Dark Orange Text */
+
+/* 6. PINK */
+.pp-row-pink .pp-status-dot { background-color: #ff7979; border-color: #eb4d4b; opacity: 0; }
+.pp-drawing-row.pp-row-pink:hover .pp-status-dot { opacity: 1; }
+.pp-row-pink .pp-d-num, .pp-row-pink .pp-d-title { color: #d63031; font-weight: 600; } /* Dark Pink Text */
+
 
 .pp-drawing-link {
     display: flex;
     align-items: center;
     text-decoration: none;
-    color: #333;
+    color: #333; /* Default Color */
     padding: 4px 6px;
     border-radius: 3px;
-    transition: background 0.1s;
+    flex-grow: 1; 
+    overflow: hidden;
 }
-.pp-drawing-link:hover { background: #e6f7ff; color: #007bff; }
+/* No hover background on link itself, row handles hover */
 
 .pp-d-num { font-weight: 700; min-width: 60px; margin-right: 10px; flex-shrink: 0; }
 .pp-d-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #555; }

@@ -78,7 +78,7 @@ const PP_Store = {
         chrome.storage.local.set({ [key]: recents });
     },
 
-    // --- NEW: STICKY FOLDERS ---
+    // --- STICKY FOLDERS ---
     async getExpanded(projectId) {
         if (!projectId) return [];
         const key = `pp_expanded_${projectId}`;
@@ -92,7 +92,22 @@ const PP_Store = {
         const key = `pp_expanded_${projectId}`;
         chrome.storage.local.set({ [key]: list });
     },
-    // ---------------------------
+
+    // --- STATUS COLORS ---
+    async getColors(projectId) {
+        if (!projectId) return {};
+        const key = `pp_colors_${projectId}`;
+        return new Promise(resolve => {
+            chrome.storage.local.get([key], res => resolve(res[key] || {}));
+        });
+    },
+
+    async saveColors(projectId, colors) {
+        if (!projectId) return;
+        const key = `pp_colors_${projectId}`;
+        chrome.storage.local.set({ [key]: colors });
+    },
+    // ---------------------
 
     async getPreferences() {
         return new Promise((resolve) => {
@@ -177,6 +192,12 @@ const PP_Recents = {
         if (this.items.length > 5) this.items.pop();
         
         PP_Store.saveRecents(PP_Core.currentProjectId, this.items);
+        PP_UI.renderRecents();
+    },
+
+    // --- NEW: Refresh UI when coloring changes (to update recents list colors too) ---
+    refreshColors(projectId) {
+        // Simple re-render of recents to catch color updates
         PP_UI.renderRecents();
     }
 };
@@ -326,7 +347,7 @@ const PP_UI = {
         PP_Recents.items.forEach(num => {
             const fullData = PP_Core.getDrawingByNum(num);
             if (fullData) {
-                const li = PP_UI.createDrawingRow(fullData, PP_Core.currentProjectId, PP_Core.cachedAreaId, true);
+                const li = PP_UI.createDrawingRow(fullData, PP_Core.currentProjectId, PP_Core.cachedAreaId);
                 ul.appendChild(li);
             }
         });
@@ -521,10 +542,14 @@ const PP_UI = {
             return;
         }
 
-        // --- NEW: FETCH STICKY STATE ---
-        const expandedList = await PP_Store.getExpanded(projectId);
+        // --- FETCH STICKY & COLOR STATES ---
+        const [expandedList, colorMap] = await Promise.all([
+            PP_Store.getExpanded(projectId),
+            PP_Store.getColors(projectId)
+        ]);
         const expandedSet = new Set(expandedList);
-        // -------------------------------
+        PP_Core.cachedColorMap = colorMap || {};
+        // ------------------------------------
 
         const groups = {};
         const disciplineKeys = []; 
@@ -565,14 +590,14 @@ const PP_UI = {
             const group = groups[discipline];
             const discContainer = document.createElement('details');
             
-            // --- NEW: APPLY STICKY STATE ---
+            // APPLY STICKY STATE
             if (expandedSet.has(discipline)) {
                 discContainer.open = true;
             } else {
                 discContainer.open = false; 
             }
 
-            // --- NEW: TOGGLE LISTENER ---
+            // TOGGLE LISTENER
             discContainer.addEventListener('toggle', () => {
                 const isOpen = discContainer.open;
                 PP_Store.getExpanded(projectId).then(current => {
@@ -582,7 +607,6 @@ const PP_UI = {
                     PP_Store.saveExpanded(projectId, Array.from(currentSet));
                 });
             });
-            // -----------------------------
 
             discContainer.dataset.discipline = discipline; // For filtering
             
@@ -638,11 +662,20 @@ const PP_UI = {
         PP_UI.filterTree();
     },
 
-    createDrawingRow(dwg, projectId, areaId, isRecent = false) {
+    createDrawingRow(dwg, projectId, areaId) {
         const li = document.createElement('li');
         li.className = 'pp-drawing-row';
         li.tabIndex = 0; // ENABLE KEYBOARD FOCUS
         
+        // --- NEW: APPLY COLOR CLASS TO ROW ---
+        if (PP_Core.cachedColorMap && PP_Core.cachedColorMap[dwg.num]) {
+            // Note: cachedColorMap stores 'pp-status-green', so we replace 'status' with 'row'
+            // or we just map it. Let's assume stored as 'pp-status-green'
+            const colorClass = PP_Core.cachedColorMap[dwg.num].replace('pp-status-', 'pp-row-');
+            li.classList.add(colorClass);
+        }
+        // -------------------------------------
+
         // --- IMPROVED KEYBOARD NAVIGATION ---
         li.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
@@ -681,11 +714,24 @@ const PP_UI = {
             e.dataTransfer.setDragImage(ghost, 0, 0);
         };
 
-        // CONTEXT MENU (Quick Add)
+        // CONTEXT MENU
         li.addEventListener('contextmenu', (e) => {
             e.preventDefault();
             PP_UI.showContextMenu(e.clientX, e.clientY, dwg.num);
         });
+
+        // --- STATUS DOT (Toggles Row Color) ---
+        const dot = document.createElement('div');
+        dot.className = 'pp-status-dot';
+        dot.title = "Click to cycle text color";
+        
+        dot.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            PP_UI.cycleStatusColor(li, dwg.num, projectId);
+        };
+        li.appendChild(dot);
+        // -----------------------
 
         if (!projectId || !areaId) {
             const errSpan = document.createElement('span');
@@ -718,12 +764,81 @@ const PP_UI = {
         return li;
     },
 
+    // --- NEW: COLOR CYCLER (UPDATES LI CLASS) ---
+    cycleStatusColor(li, drawingNum, projectId) {
+        // Order: Green -> Red -> Yellow -> Blue -> Orange -> Pink -> Clear
+        const order = [
+            'pp-row-green',
+            'pp-row-red',
+            'pp-row-yellow',
+            'pp-row-blue',
+            'pp-row-orange',
+            'pp-row-pink'
+        ];
+        
+        // Find current class on LI
+        let currentIndex = -1;
+        for (let i = 0; i < order.length; i++) {
+            if (li.classList.contains(order[i])) {
+                currentIndex = i;
+                li.classList.remove(order[i]); // Remove old
+                break;
+            }
+        }
+
+        let nextClass = null;
+        if (currentIndex < order.length - 1) {
+            nextClass = order[currentIndex + 1];
+            li.classList.add(nextClass);
+        }
+        // If it was the last one (Pink), nextClass remains null, essentially clearing it
+
+        // Update Store (Save as 'pp-status-X' for compat or 'pp-row-X', let's use what we used before: 'pp-status-')
+        // We need to map 'pp-row-X' back to 'pp-status-X' to match previous logic if we care, 
+        // OR we just switch storage to use 'pp-row-' keys. Let's match CSS and use pp-row-X for new saves.
+        // But WAIT, getColors loads `pp-status-` from previous iteration? 
+        // -> createDrawingRow logic above handles `replace('pp-status-', 'pp-row-')`. 
+        // So we can save as `pp-status-` to stay consistent OR update everything.
+        // Let's save as `pp-status-` to minimize churn if user has existing data.
+        
+        let storeValue = null;
+        if (nextClass) storeValue = nextClass.replace('pp-row-', 'pp-status-');
+
+        if (!PP_Core.cachedColorMap) PP_Core.cachedColorMap = {};
+        
+        if (storeValue) {
+            PP_Core.cachedColorMap[drawingNum] = storeValue;
+        } else {
+            delete PP_Core.cachedColorMap[drawingNum];
+        }
+        PP_Store.saveColors(projectId, PP_Core.cachedColorMap);
+        
+        // Refresh Recents too so they match
+        PP_Recents.refreshColors(projectId);
+    },
+
     showContextMenu(x, y, drawingNum) {
         const menu = document.getElementById('pp-context-menu');
         menu.innerHTML = '';
         menu.style.top = `${y}px`;
         menu.style.left = `${x}px`;
         menu.style.display = 'block';
+
+        // COPY LINK
+        const copyLi = document.createElement('li');
+        copyLi.innerHTML = `📋 <b>Copy Link</b>`;
+        copyLi.style.borderBottom = "1px solid #eee";
+        copyLi.onclick = () => {
+            const dwg = PP_Core.getDrawingByNum(drawingNum);
+            if (dwg) {
+                const url = PP_Core.getDrawingUrl(dwg.id);
+                navigator.clipboard.writeText(url);
+                copyLi.textContent = "Copied!";
+                copyLi.style.color = "green";
+                setTimeout(() => { menu.style.display = 'none'; }, 600);
+            }
+        };
+        menu.appendChild(copyLi);
 
         if (PP_Favorites.folders.length === 0) {
             const li = document.createElement('li');
@@ -819,6 +934,7 @@ const PP_Core = {
     isScanning: false,
     cachedDrawings: [], 
     cachedAreaId: null,
+    cachedColorMap: {}, // NEW: Cache for colors
     isFlushing: false, 
     urlWatcherActive: false,
     reinitTimer: null,
