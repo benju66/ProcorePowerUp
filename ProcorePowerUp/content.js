@@ -78,6 +78,22 @@ const PP_Store = {
         chrome.storage.local.set({ [key]: recents });
     },
 
+    // --- NEW: STICKY FOLDERS ---
+    async getExpanded(projectId) {
+        if (!projectId) return [];
+        const key = `pp_expanded_${projectId}`;
+        return new Promise(resolve => {
+            chrome.storage.local.get([key], res => resolve(res[key] || []));
+        });
+    },
+
+    async saveExpanded(projectId, list) {
+        if (!projectId) return;
+        const key = `pp_expanded_${projectId}`;
+        chrome.storage.local.set({ [key]: list });
+    },
+    // ---------------------------
+
     async getPreferences() {
         return new Promise((resolve) => {
             chrome.storage.local.get(['pp_prefs'], (result) => {
@@ -495,7 +511,7 @@ const PP_UI = {
         }
     },
 
-    buildTree(drawings, discMap, projectId, areaId) {
+    async buildTree(drawings, discMap, projectId, areaId) {
         const treeRoot = document.getElementById('pp-tree-content');
         treeRoot.innerHTML = ''; 
 
@@ -504,6 +520,11 @@ const PP_UI = {
             treeRoot.innerHTML = '<div class="pp-empty-state"><p>No valid drawings found.</p></div>';
             return;
         }
+
+        // --- NEW: FETCH STICKY STATE ---
+        const expandedList = await PP_Store.getExpanded(projectId);
+        const expandedSet = new Set(expandedList);
+        // -------------------------------
 
         const groups = {};
         const disciplineKeys = []; 
@@ -543,7 +564,26 @@ const PP_UI = {
         disciplineKeys.forEach(discipline => {
             const group = groups[discipline];
             const discContainer = document.createElement('details');
-            discContainer.open = false; 
+            
+            // --- NEW: APPLY STICKY STATE ---
+            if (expandedSet.has(discipline)) {
+                discContainer.open = true;
+            } else {
+                discContainer.open = false; 
+            }
+
+            // --- NEW: TOGGLE LISTENER ---
+            discContainer.addEventListener('toggle', () => {
+                const isOpen = discContainer.open;
+                PP_Store.getExpanded(projectId).then(current => {
+                    const currentSet = new Set(current);
+                    if (isOpen) currentSet.add(discipline);
+                    else currentSet.delete(discipline);
+                    PP_Store.saveExpanded(projectId, Array.from(currentSet));
+                });
+            });
+            // -----------------------------
+
             discContainer.dataset.discipline = discipline; // For filtering
             
             // Check Interactive Filter
