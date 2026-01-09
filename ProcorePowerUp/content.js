@@ -22,8 +22,10 @@ const PP_Store = {
             drawingAreaId: areaId,
             drawings: leanDrawings
         };
-        chrome.storage.local.set({ [key]: payload });
-        return payload;
+        // Wrap in promise for await compatibility if needed, though chrome.storage is async
+        return new Promise((resolve) => {
+            chrome.storage.local.set({ [key]: payload }, () => resolve(payload));
+        });
     },
 
     async saveDisciplineMap(projectId, mapData) {
@@ -84,7 +86,7 @@ const PP_Store = {
 // MODULE: FAVORITES LOGIC
 // ==========================================
 const PP_Favorites = {
-    folders: [], // [{ id: 1, name: "Framing", drawings: ["A1.01", "S2.0"] }]
+    folders: [], 
 
     async init(projectId) {
         this.folders = await PP_Store.getFavorites(projectId);
@@ -95,7 +97,7 @@ const PP_Favorites = {
         if (!name) return;
         this.folders.push({
             id: Date.now(),
-            name: name,
+            name: name, // Plain text storage
             drawings: []
         });
         this.save();
@@ -112,9 +114,9 @@ const PP_Favorites = {
         if (folder && !folder.drawings.includes(drawingNum)) {
             folder.drawings.push(drawingNum);
             this.save();
-            return true; // Added
+            return true; 
         }
-        return false; // Already exists
+        return false; 
     },
 
     removeDrawing(folderId, drawingNum) {
@@ -143,10 +145,10 @@ const PP_UI = {
         
         const prefs = await PP_Store.getPreferences();
 
-        // 1. Toggle Button (FIXED ICON)
+        // 1. Toggle Button
         const toggleBtn = document.createElement('div');
         toggleBtn.id = 'pp-toggle-btn';
-        toggleBtn.textContent = '⚡';  // Replaced broken char with Lightning Bolt
+        toggleBtn.textContent = '⚡';
         if (prefs.buttonTop) toggleBtn.style.top = prefs.buttonTop;
         
         this.makeDraggable(toggleBtn);
@@ -162,29 +164,33 @@ const PP_UI = {
         sidebar.id = 'pp-sidebar';
         if (prefs.sidebarWidth) sidebar.style.width = `${prefs.sidebarWidth}px`;
 
-        // FIXED ICONS IN HTML BELOW
+        // --- UPDATED LAYOUT STRUCTURE ---
         sidebar.innerHTML = `
             <div id="pp-resizer"></div> 
+            
             <div class="pp-header">
                 <h3>Procore Power-Up</h3>
                 <span class="pp-close-btn" id="pp-close">&times;</span>
             </div>
             
+            <div class="pp-search-box">
+                <input type="text" id="pp-search" placeholder="Filter all drawings...">
+            </div>
+
             <div class="pp-section-title">
                 <span>⭐ Favorites</span>
                 <button id="pp-new-folder" class="pp-icon-btn" title="New Folder">+</button>
             </div>
             <div id="pp-favorites-list" class="pp-fav-container"></div>
 
-            <div class="pp-controls">
-                <button id="pp-load-all" class="pp-btn-primary">🔄 Scan Project Data</button>
-            </div>
-            
-            <div class="pp-search-box">
-                <input type="text" id="pp-search" placeholder="Filter all drawings...">
-            </div>
             <div id="pp-tree-content" class="pp-content"></div>
-            <div class="pp-footer" id="pp-footer"></div>
+
+            <div class="pp-footer-container">
+                <div class="pp-controls">
+                    <button id="pp-load-all" class="pp-btn-primary">🔄 Scan Project Data</button>
+                </div>
+                <div class="pp-footer" id="pp-footer"></div>
+            </div>
         `;
         document.body.appendChild(sidebar);
 
@@ -214,7 +220,7 @@ const PP_UI = {
         PP_Favorites.folders.forEach(folder => {
             const folderEl = document.createElement('details');
             folderEl.className = 'pp-fav-folder';
-            folderEl.open = true; // Default open for ease
+            folderEl.open = true;
 
             // Drag Drop Targets
             folderEl.ondragover = (e) => {
@@ -229,19 +235,19 @@ const PP_UI = {
                 
                 if (num) {
                     const added = PP_Favorites.addDrawingToFolder(folder.id, num);
-                    
-                    // --- ANIMATION TRIGGER START ---
-                    if (added !== false) { // Only animate if it actually worked
+                    if (added !== false) { 
                         folderEl.classList.add('pp-gulp');
                         setTimeout(() => folderEl.classList.remove('pp-gulp'), 500);
                     }
-                    // --- ANIMATION TRIGGER END ---
                 }
             };
 
-            // Summary (Header)
+            // Summary (Header) - SECURITY FIX: No innerHTML for name
             const summary = document.createElement('summary');
-            summary.innerHTML = `<span class="pp-folder-name">${folder.name}</span>`;
+            
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'pp-folder-name';
+            nameSpan.textContent = folder.name; // Safe injection
             
             const delBtn = document.createElement('span');
             delBtn.className = 'pp-del-folder';
@@ -251,13 +257,14 @@ const PP_UI = {
                 e.preventDefault(); 
                 PP_Favorites.removeFolder(folder.id);
             };
+
+            summary.appendChild(nameSpan);
             summary.appendChild(delBtn);
             folderEl.appendChild(summary);
 
             // List
             const list = document.createElement('ul');
             folder.drawings.forEach(num => {
-                // We recreate the row, but need to look up the Full Data to get the ID/Title
                 const fullData = PP_Core.getDrawingByNum(num);
                 const li = document.createElement('li');
                 li.className = 'pp-fav-item';
@@ -272,7 +279,6 @@ const PP_UI = {
                     li.innerHTML = `<span class="pp-missing">${num} (Need Scan)</span>`;
                 }
 
-                // Remove item button
                 const removeSpan = document.createElement('span');
                 removeSpan.className = 'pp-del-item';
                 removeSpan.innerHTML = '&times;';
@@ -364,12 +370,11 @@ const PP_UI = {
             treeRoot.innerHTML = `<div class="pp-empty-state"><p><strong>No drawings found.</strong></p><p>Please <b>Refresh the Page</b> to capture discipline names, then click "Scan Project Data".</p></div>`;
             footer.innerText = "";
         } else if (stateType === 'DATA') {
-            // Save global reference for lookups
             PP_Core.cachedDrawings = payload.drawings; 
             PP_Core.cachedAreaId = payload.drawingAreaId;
 
             PP_UI.buildTree(payload.drawings, payload.map, payload.projectId, payload.drawingAreaId);
-            PP_UI.renderFavorites(); // Re-render favorites to resolve links
+            PP_UI.renderFavorites(); 
             const dateStr = new Date(payload.timestamp).toLocaleString();
             footer.innerText = `Last updated: ${dateStr}`;
         }
@@ -452,7 +457,6 @@ const PP_UI = {
         const li = document.createElement('li');
         li.className = 'pp-drawing-row';
         
-        // DRAG AND DROP ATTRIBUTES
         li.draggable = true;
         li.ondragstart = (e) => {
             e.dataTransfer.setData("text/plain", dwg.num);
@@ -549,8 +553,9 @@ const PP_Core = {
     dataBuffer: [],
     debounceTimer: null,
     isScanning: false,
-    cachedDrawings: [], // Helper for Favorites Lookup
+    cachedDrawings: [], 
     cachedAreaId: null,
+    isFlushing: false, // RACE CONDITION FIX
 
     init() {
         PP_UI.init();
@@ -558,7 +563,6 @@ const PP_Core = {
         this.currentProjectId = ids.projectId;
 
         if (this.currentProjectId) {
-            // Load Favorites Init
             PP_Favorites.init(this.currentProjectId);
 
             PP_Store.getProjectData(this.currentProjectId).then(res => {
@@ -581,7 +585,6 @@ const PP_Core = {
         return { companyId: c?c[1]:null, projectId: p?p[1]:null, drawingAreaId: a?a[1]:null };
     },
 
-    // Helper for Favorites to resolve current ID
     getDrawingByNum(num) {
         if (!this.cachedDrawings) return null;
         return this.cachedDrawings.find(d => 
@@ -608,7 +611,7 @@ const PP_Core = {
         if (!activeProjectId) return;
 
         const newMap = {};
-        PP_Core.findDisciplinesRecursive(rawData, newMap, 0);
+        PP_Core.findDisciplinesRecursive(rawData, newMap, 0, 0); // Added depth param
         if (Object.keys(newMap).length > 0) {
             PP_Core.currentMap = { ...PP_Core.currentMap, ...newMap };
             PP_Store.saveDisciplineMap(activeProjectId, PP_Core.currentMap);
@@ -626,60 +629,73 @@ const PP_Core = {
     },
 
     async flushBuffer(activeProjectId, ids) {
-        if (PP_Core.dataBuffer.length === 0) return;
-        PP_UI.updateLoadButton("Processing...", true);
-
-        const currentCache = await PP_Store.getProjectData(activeProjectId);
-        let merged = currentCache.data ? currentCache.data.drawings : [];
-        const existingIds = new Set(merged.map(d => d.id));
-
-        const newItems = PP_Core.dataBuffer
-            .filter(d => !existingIds.has(d.id))
-            .map(d => ({
-                id: d.id,
-                num: d.number || d.drawing_number,
-                title: d.title,
-                discipline: d.discipline, 
-                discipline_name: d.discipline_name || (d.discipline ? d.discipline.name : null)
-            }));
-
-        PP_Core.dataBuffer = [];
-
-        if (newItems.length > 0) {
-            merged = [...merged, ...newItems];
-            const areaIdToSave = ids.drawingAreaId || (currentCache.data ? currentCache.data.drawingAreaId : null);
-            const saved = await PP_Store.saveProjectData(activeProjectId, merged, ids.companyId, areaIdToSave);
-            PP_UI.renderState('DATA', { ...saved, map: PP_Core.currentMap, projectId: activeProjectId });
-        }
-
-        PP_UI.updateLoadButton("Done!", false);
+        if (PP_Core.isFlushing || PP_Core.dataBuffer.length === 0) return;
+        PP_Core.isFlushing = true;
         
-        // --- ANIMATION TRIGGER START ---
-        const btn = document.getElementById('pp-load-all');
-        if (btn) {
-            btn.classList.add('pp-pop');
-            // Remove class after animation plays so it can play again next time
-            setTimeout(() => btn.classList.remove('pp-pop'), 500);
+        try {
+            PP_UI.updateLoadButton("Processing...", true);
+
+            const currentCache = await PP_Store.getProjectData(activeProjectId);
+            let merged = currentCache.data ? currentCache.data.drawings : [];
+            const existingIds = new Set(merged.map(d => d.id));
+
+            const newItems = PP_Core.dataBuffer
+                .filter(d => !existingIds.has(d.id))
+                .map(d => ({
+                    id: d.id,
+                    num: d.number || d.drawing_number,
+                    title: d.title,
+                    discipline: d.discipline, 
+                    discipline_name: d.discipline_name || (d.discipline ? d.discipline.name : null)
+                }));
+
+            PP_Core.dataBuffer = [];
+
+            if (newItems.length > 0) {
+                merged = [...merged, ...newItems];
+                const areaIdToSave = ids.drawingAreaId || (currentCache.data ? currentCache.data.drawingAreaId : null);
+                const saved = await PP_Store.saveProjectData(activeProjectId, merged, ids.companyId, areaIdToSave);
+                PP_UI.renderState('DATA', { ...saved, map: PP_Core.currentMap, projectId: activeProjectId });
+            }
+
+            PP_UI.updateLoadButton("Done!", false);
+            
+            const btn = document.getElementById('pp-load-all');
+            if (btn) {
+                btn.classList.add('pp-pop');
+                setTimeout(() => btn.classList.remove('pp-pop'), 500);
+            }
+            
+            setTimeout(() => PP_UI.updateLoadButton("🔄 Scan Project Data", false), 3000); 
+            PP_Core.isScanning = false;
+        } catch(err) {
+            console.error("PP: Flush failed", err);
+        } finally {
+            PP_Core.isFlushing = false;
+            // Catch any stragglers that arrived during async save
+            if (PP_Core.dataBuffer.length > 0) {
+                 setTimeout(() => PP_Core.flushBuffer(activeProjectId, ids), 500);
+            }
         }
-        // --- ANIMATION TRIGGER END ---
-        
-        setTimeout(() => PP_UI.updateLoadButton("🔄 Scan Project Data", false), 3000); // FIXED ICON
-        PP_Core.isScanning = false;
     },
 
-    findDisciplinesRecursive(obj, map, sortCounter) {
+    findDisciplinesRecursive(obj, map, sortCounter, depth) {
+        if (depth > 5) return; // Prevent deep recursion freezing
         if (!obj || typeof obj !== 'object') return;
+        
         if (obj.id && obj.name && typeof obj.name === 'string' && !obj.drawing_number && !obj.number) {
             map[obj.id] = { name: obj.name, index: sortCounter };
         }
         if (Array.isArray(obj)) {
             obj.forEach((item, index) => {
-                PP_Core.findDisciplinesRecursive(item, map, index); 
+                PP_Core.findDisciplinesRecursive(item, map, index, depth + 1); 
             });
         } else {
             for (const key in obj) {
                 if (Object.prototype.hasOwnProperty.call(obj, key)) {
-                    PP_Core.findDisciplinesRecursive(obj[key], map, sortCounter);
+                    // Skip massive metadata keys
+                    if (['permissions', 'metadata', 'view_options'].includes(key)) continue;
+                    PP_Core.findDisciplinesRecursive(obj[key], map, sortCounter, depth + 1);
                 }
             }
         }
@@ -746,15 +762,15 @@ const PP_Core = {
 
         const expandAllBtn = document.querySelector('.expand-button'); 
         PP_Core.isScanning = true;
-        PP_UI.updateLoadButton("⏳ Initializing Scan...", true); // FIXED ICON
+        PP_UI.updateLoadButton("⏳ Initializing Scan...", true); 
         
         if (expandAllBtn) {
             const ariaLabel = expandAllBtn.getAttribute('aria-label') || "";
             if (ariaLabel.toLowerCase().includes('close')) {
                 PP_UI.updateLoadButton("Resetting View...", true);
-                expandAllBtn.click(); // Collapse
+                expandAllBtn.click(); 
                 await new Promise(r => setTimeout(r, 800)); 
-                expandAllBtn.click(); // Expand
+                expandAllBtn.click(); 
                 await new Promise(r => setTimeout(r, 800)); 
             } else {
                 expandAllBtn.click();

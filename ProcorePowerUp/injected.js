@@ -38,9 +38,16 @@
     window.fetch = async function(input, init) {
         const response = await originalFetch(input, init);
         let url = (input instanceof Request) ? input.url : input;
+        
         if (isRelevantUrl(url)) {
              const contentType = response.headers.get('content-type');
-             if (contentType && contentType.includes('application/json')) {
+             const contentLength = response.headers.get('content-length');
+             
+             // GUARD: Only clone if JSON and under 1MB (approx) to avoid crashing on massive blobs
+             const isJson = contentType && contentType.includes('application/json');
+             const isSmallEnough = !contentLength || parseInt(contentLength) < 1000000;
+
+             if (isJson && isSmallEnough) {
                  try {
                      const clone = response.clone();
                      clone.json().then(data => broadcast(data, url)).catch(e => {});
@@ -57,8 +64,13 @@
             const url = this.responseURL || this._url;
             if (isRelevantUrl(url)) {
                 try {
-                    const data = JSON.parse(this.responseText);
-                    broadcast(data, url);
+                    const contentType = this.getResponseHeader('Content-Type');
+                    if (contentType && contentType.includes('application/json')) {
+                        // XHR responseText is already in memory, so size check is less critical for crash prevention,
+                        // but still good practice to wrap in try/catch.
+                        const data = JSON.parse(this.responseText);
+                        broadcast(data, url);
+                    }
                 } catch (e) { }
             }
         });

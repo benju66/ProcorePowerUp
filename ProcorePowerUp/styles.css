@@ -1,3 +1,5 @@
+/* styles.css */
+
 /* --- Floating Button --- */
 #pp-toggle-btn {
     position: fixed;
@@ -10,7 +12,7 @@
     border-right: none;
     border-left: 1px solid #ccc;
     border-radius: 5px 0 0 5px;
-    cursor: move;
+    cursor: pointer; 
     z-index: 99999;
     font-size: 20px;
     display: flex;
@@ -19,9 +21,10 @@
     box-shadow: -2px 2px 5px rgba(0,0,0,0.2);
     user-select: none;
     color: #333;
+    transition: background 0.2s, transform 0.2s; /* Smoother interactions */
 }
 
-/* UPDATE: Added Wiggle Animation on Hover */
+/* Wiggle Animation on Hover */
 #pp-toggle-btn:hover {
     background: #e0e0e0;
     animation: pp-wiggle-kframe 0.5s ease-in-out;
@@ -39,15 +42,32 @@
     box-shadow: -2px 0 10px rgba(0,0,0,0.1);
     z-index: 99999;
     transform: translateX(100%); 
-    transition: transform 0.3s ease;
+    transition: transform 0.3s cubic-bezier(0.4, 0.0, 0.2, 1); /* Slightly nicer easing */
     display: flex;
     flex-direction: column;
-    font-family: "Inter", sans-serif;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     font-size: 13px;
     border-left: 1px solid #ddd;
     color: #333;
+    -webkit-font-smoothing: antialiased; /* Crisp text */
 }
 #pp-sidebar.open { transform: translateX(0); }
+
+/* --- CUSTOM SCROLLBARS (New) --- */
+#pp-sidebar ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+#pp-sidebar ::-webkit-scrollbar-track {
+    background: transparent;
+}
+#pp-sidebar ::-webkit-scrollbar-thumb {
+    background: #ccc;
+    border-radius: 3px;
+}
+#pp-sidebar ::-webkit-scrollbar-thumb:hover {
+    background: #bbb;
+}
 
 /* --- Resizer Handle --- */
 #pp-resizer {
@@ -72,22 +92,28 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 2; /* Ensure it stays above scrolling content */
 }
-.pp-header h3 { margin: 0; font-size: 16px; color: #333; }
-.pp-close-btn { cursor: pointer; font-size: 20px; font-weight: bold; color: #666; }
+.pp-header h3 { margin: 0; font-size: 16px; color: #333; font-weight: 700; }
+.pp-close-btn { cursor: pointer; font-size: 20px; font-weight: bold; color: #666; transition: color 0.2s; }
 .pp-close-btn:hover { color: #000; }
 
 .pp-section-title {
     padding: 10px 15px;
     background: #f1f1f1;
     font-weight: bold;
-    font-size: 12px;
+    font-size: 11px; /* Slightly smaller for 'label' feel */
     color: #555;
     text-transform: uppercase;
+    letter-spacing: 0.5px;
     display: flex;
     justify-content: space-between;
     align-items: center;
     border-bottom: 1px solid #e0e0e0;
+    border-top: 1px solid #eee; 
+    flex-shrink: 0;
 }
 
 .pp-icon-btn {
@@ -97,6 +123,7 @@
     cursor: pointer;
     color: #f47b20;
     padding: 0 5px;
+    transition: transform 0.2s, color 0.2s;
 }
 .pp-icon-btn:hover { color: #d66410; transform: scale(1.2); }
 
@@ -106,6 +133,7 @@
     overflow-y: auto;
     border-bottom: 1px solid #eee;
     background: #fafafa;
+    flex-shrink: 0;
 }
 .pp-fav-empty { padding: 15px; text-align: center; color: #999; font-style: italic; font-size: 11px; }
 
@@ -113,20 +141,23 @@
     margin-bottom: 0;
     border-bottom: 1px solid #eee;
 }
-.pp-fav-folder summary {
+#pp-sidebar .pp-fav-folder summary {
     background: #fff;
     padding: 8px 15px;
     font-size: 12px;
     display: flex;
     justify-content: space-between;
+    transition: background 0.1s;
 }
-.pp-folder-name { font-weight: 700; color: #444; }
-.pp-del-folder { color: #ccc; cursor: pointer; font-weight: bold; font-size: 14px; }
-.pp-del-folder:hover { color: red; }
+#pp-sidebar .pp-fav-folder summary:hover { background: #f9f9f9; }
+
+.pp-folder-name { font-weight: 600; color: #444; }
+.pp-del-folder { color: #ccc; cursor: pointer; font-weight: bold; font-size: 14px; transition: color 0.2s; }
+.pp-del-folder:hover { color: #e74c3c; }
 
 /* Drag Drop States */
 .pp-fav-folder.drag-over {
-    background: #e6f7ff;
+    background: #e6f7ff !important; /* Force override */
     border: 2px dashed #007bff;
 }
 
@@ -137,15 +168,20 @@
     padding: 4px 10px 4px 30px;
     font-size: 12px;
 }
-.pp-del-item { cursor: pointer; color: #ccc; font-size: 14px; margin-left: 5px; }
-.pp-del-item:hover { color: red; }
+.pp-del-item { cursor: pointer; color: #ccc; font-size: 14px; margin-left: 5px; transition: color 0.2s; }
+.pp-del-item:hover { color: #e74c3c; }
 .pp-missing { color: #999; font-style: italic; }
 
-/* --- Controls Area --- */
-.pp-controls {
-    padding: 10px;
-    border-bottom: 1px solid #eee;
+/* --- Footer Area (Controls + Text) --- */
+.pp-footer-container {
+    border-top: 1px solid #eee;
     background: #fff;
+    flex-shrink: 0;
+    z-index: 2;
+}
+
+.pp-controls {
+    padding: 10px 10px 5px 10px;
     text-align: center;
 }
 .pp-btn-primary {
@@ -155,33 +191,54 @@
     padding: 8px 16px;
     border-radius: 4px;
     cursor: pointer;
-    font-weight: bold;
+    font-weight: 600;
     width: 100%;
-    transition: transform 0.1s; /* prepare for animation */
+    transition: background 0.2s, transform 0.1s;
+    font-size: 13px;
 }
 .pp-btn-primary:hover { background: #d66410; }
+.pp-btn-primary:active { transform: scale(0.98); }
 .pp-btn-primary:disabled { background: #ccc; cursor: wait; }
 
 /* --- Main Tree Content --- */
-.pp-search-box { padding: 10px; border-bottom: 1px solid #eee; background: #fff; }
-.pp-search-box input { width: 95%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+.pp-search-box { 
+    padding: 10px; 
+    background: #fff; 
+    flex-shrink: 0; 
+    border-bottom: 1px solid #eee; /* Added separator */
+}
+.pp-search-box input { 
+    width: 95%; /* fallback */
+    width: -webkit-fill-available;
+    padding: 8px; 
+    border: 1px solid #ccc; 
+    border-radius: 4px; 
+    font-size: 12px;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    outline: none;
+}
+/* Orange highlight on focus */
+.pp-search-box input:focus {
+    border-color: #f47b20;
+    box-shadow: 0 0 0 2px rgba(244, 123, 32, 0.1);
+}
 
 .pp-content { flex: 1; overflow-y: auto; padding: 10px; }
 .pp-empty-state { padding: 20px; text-align: center; color: #666; line-height: 1.5; }
 
 /* --- Footer --- */
 .pp-footer {
-    padding: 10px;
-    background: #f8f9fa;
-    border-top: 1px solid #eee;
-    font-size: 11px;
-    color: #888;
+    padding: 5px 10px 10px 10px;
+    background: #fff;
+    font-size: 10px; /* Slightly smaller */
+    color: #999;
     text-align: center;
 }
 
-/* --- Tree Components --- */
-details { margin-bottom: 5px; }
-summary {
+/* --- Tree Components (Scoped) --- */
+#pp-sidebar details { margin-bottom: 5px; }
+
+#pp-sidebar summary {
     cursor: pointer;
     padding: 5px;
     font-weight: 600;
@@ -189,19 +246,21 @@ summary {
     border-radius: 3px;
     display: flex;
     align-items: center;
+    user-select: none;
 }
-summary:hover { background-color: #f0f0f0; }
-summary::-webkit-details-marker { display: none; }
-summary:before {
+#pp-sidebar summary:hover { background-color: #f0f0f0; }
+#pp-sidebar summary::-webkit-details-marker { display: none; }
+#pp-sidebar summary:before {
     content: "▶";
     font-size: 10px;
-    margin-right: 5px;
+    margin-right: 6px;
+    color: #888;
     display: inline-block;
     transition: transform 0.2s;
 }
-details[open] > summary:before { transform: rotate(90deg); }
+#pp-sidebar details[open] > summary:before { transform: rotate(90deg); }
 
-ul { list-style: none; padding-left: 20px; margin: 0; }
+#pp-sidebar ul { list-style: none; padding-left: 20px; margin: 0; }
 
 .pp-drawing-row { margin: 2px 0; cursor: grab; }
 .pp-drawing-row:active { cursor: grabbing; }
@@ -218,7 +277,7 @@ ul { list-style: none; padding-left: 20px; margin: 0; }
 .pp-drawing-link:hover { background: #e6f7ff; color: #007bff; }
 
 .pp-d-num { font-weight: 700; min-width: 60px; margin-right: 10px; flex-shrink: 0; }
-.pp-d-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pp-d-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #555; }
 
 /* --- Colors & Tags --- */
 .pp-disc-tag {
@@ -231,6 +290,7 @@ ul { list-style: none; padding-left: 20px; margin: 0; }
     color: white;
     margin-right: 5px;
     font-size: 11px;
+    font-weight: bold;
     flex-shrink: 0;
 }
 .c-red { background-color: #e74c3c; } 
@@ -245,10 +305,10 @@ ul { list-style: none; padding-left: 20px; margin: 0; }
    HAPPY ANIMATIONS
    ============================================================ */
 
-/* 1. The Success Pop (Bouncy scaling for Load Button) */
+/* 1. The Success Pop */
 @keyframes pp-pop-kframe {
     0% { transform: scale(1); }
-    50% { transform: scale(1.05); background-color: #27ae60; } /* Flash Green */
+    50% { transform: scale(1.05); background-color: #27ae60; }
     100% { transform: scale(1); }
 }
 
@@ -256,7 +316,7 @@ ul { list-style: none; padding-left: 20px; margin: 0; }
     animation: pp-pop-kframe 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
-/* 2. The Folder Gulp (Folder expands when it "eats" a file) */
+/* 2. The Folder Gulp */
 @keyframes pp-gulp-kframe {
     0% { transform: scale(1); }
     50% { transform: scale(1.02); background-color: #e8f5e9; border-color: #27ae60; }
@@ -267,7 +327,7 @@ ul { list-style: none; padding-left: 20px; margin: 0; }
     animation: pp-gulp-kframe 0.5s ease-out;
 }
 
-/* 3. The Toggle Wiggle (Friendly wave on hover) */
+/* 3. The Toggle Wiggle */
 @keyframes pp-wiggle-kframe {
     0% { transform: rotate(0deg); }
     25% { transform: rotate(-10deg); }
