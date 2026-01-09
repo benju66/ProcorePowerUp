@@ -1,6 +1,6 @@
-// injected.js - The Network Wiretap (Manifest V3 Main World)
+// injected.js
 (function() {
-    console.log("Procore Power-Up: Wiretap active in Main World.");
+    console.log("Procore Power-Up: Wiretap active.");
 
     function getIds() {
         const url = window.location.href;
@@ -16,79 +16,52 @@
     }
 
     function broadcast(data, sourceUrl) {
+        // SECURITY PATCH: Only broadcast to same origin
         window.postMessage({ 
             type: 'PP_DATA', 
             payload: data, 
             ids: getIds(),
             source: sourceUrl 
-        }, '*');
+        }, window.location.origin);
     }
 
-    // STRICT WHITELIST
     function isRelevantUrl(url) {
         if (!url || !url.includes('procore.com')) return false;
-        
         const lower = url.toLowerCase();
-
-        // 1. Exclude Binaries/Static (Performance Critical)
         if (lower.match(/\.(png|jpg|gif|css|js|pdf|zip|svg|woff)(\?.*)?$/)) return false;
-        if (lower.includes('/pdf') || lower.includes('/download')) return false;
-
-        // 2. Explicitly allow Drawing Endpoints
-        if (lower.includes('drawing_log') || 
-            lower.includes('drawing_revisions') || 
-            lower.includes('drawing_areas') ||
-            lower.includes('/drawings')) {
-            return true;
-        }
-
-        // 3. Explicitly allow Metadata/Discipline Endpoints
-        if (lower.includes('groups') || 
-            lower.includes('discipline') ||
-            lower.includes('configurable_field_sets')) {
-            return true;
-        }
-
+        if (lower.includes('drawing_log') || lower.includes('drawing_revisions') || lower.includes('/drawings')) return true;
+        if (lower.includes('groups') || lower.includes('discipline')) return true;
         return false;
     }
 
-    // 1. Intercept XHR
+    const originalFetch = window.fetch;
+    window.fetch = async function(input, init) {
+        const response = await originalFetch(input, init);
+        let url = (input instanceof Request) ? input.url : input;
+        if (isRelevantUrl(url)) {
+             const contentType = response.headers.get('content-type');
+             if (contentType && contentType.includes('application/json')) {
+                 try {
+                     const clone = response.clone();
+                     clone.json().then(data => broadcast(data, url)).catch(e => {});
+                 } catch (e) {}
+             }
+        }
+        return response;
+    };
+    
+    // Also patch XHR just in case
     const originalSend = XMLHttpRequest.prototype.send;
     XMLHttpRequest.prototype.send = function() {
         this.addEventListener('load', function() {
             const url = this.responseURL || this._url;
             if (isRelevantUrl(url)) {
-                // Sanity check Content-Type
-                const contentType = this.getResponseHeader('Content-Type');
-                if (contentType && !contentType.includes('application/json')) return;
-
                 try {
                     const data = JSON.parse(this.responseText);
                     broadcast(data, url);
-                } catch (e) { /* Not JSON */ }
+                } catch (e) { }
             }
         });
         return originalSend.apply(this, arguments);
     };
-    
-    // 2. Intercept Fetch
-    const originalFetch = window.fetch;
-    window.fetch = async function(input, init) {
-        const response = await originalFetch(input, init);
-        
-        let url = (input instanceof Request) ? input.url : input;
-        
-        if (isRelevantUrl(url)) {
-             // Clone only if JSON to avoid binary overhead
-             const contentType = response.headers.get('content-type');
-             if (contentType && contentType.includes('application/json')) {
-                 const clone = response.clone();
-                 clone.json().then(data => {
-                     broadcast(data, url);
-                 }).catch(e => {});
-             }
-        }
-        return response;
-    };
-
 })();

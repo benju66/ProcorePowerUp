@@ -1,4 +1,4 @@
-// content.js - Procore Power-Up: AG Grid Target & Hard Reset Expand
+// content.js - Procore Power-Up: Favorites, Drag-n-Drop & Robust Scans
 
 // ==========================================
 // MODULE: STORE
@@ -48,6 +48,21 @@ const PP_Store = {
         });
     },
 
+    // --- FAVORITES STORAGE ---
+    async getFavorites(projectId) {
+        if (!projectId) return [];
+        const key = `pp_favs_${projectId}`;
+        return new Promise(resolve => {
+            chrome.storage.local.get([key], res => resolve(res[key] || []));
+        });
+    },
+
+    async saveFavorites(projectId, folders) {
+        if (!projectId) return;
+        const key = `pp_favs_${projectId}`;
+        chrome.storage.local.set({ [key]: folders });
+    },
+
     async getPreferences() {
         return new Promise((resolve) => {
             chrome.storage.local.get(['pp_prefs'], (result) => {
@@ -66,20 +81,72 @@ const PP_Store = {
 };
 
 // ==========================================
+// MODULE: FAVORITES LOGIC
+// ==========================================
+const PP_Favorites = {
+    folders: [], // [{ id: 1, name: "Framing", drawings: ["A1.01", "S2.0"] }]
+
+    async init(projectId) {
+        this.folders = await PP_Store.getFavorites(projectId);
+        PP_UI.renderFavorites();
+    },
+
+    addFolder(name) {
+        if (!name) return;
+        this.folders.push({
+            id: Date.now(),
+            name: name,
+            drawings: []
+        });
+        this.save();
+    },
+
+    removeFolder(folderId) {
+        if(!confirm("Delete this folder?")) return;
+        this.folders = this.folders.filter(f => f.id !== folderId);
+        this.save();
+    },
+
+    addDrawingToFolder(folderId, drawingNum) {
+        const folder = this.folders.find(f => f.id === folderId);
+        if (folder && !folder.drawings.includes(drawingNum)) {
+            folder.drawings.push(drawingNum);
+            this.save();
+            return true; // Added
+        }
+        return false; // Already exists
+    },
+
+    removeDrawing(folderId, drawingNum) {
+        const folder = this.folders.find(f => f.id === folderId);
+        if (folder) {
+            folder.drawings = folder.drawings.filter(d => d !== drawingNum);
+            this.save();
+        }
+    },
+
+    save() {
+        PP_Store.saveFavorites(PP_Core.currentProjectId, this.folders);
+        PP_UI.renderFavorites();
+    }
+};
+
+// ==========================================
 // MODULE: UI
 // ==========================================
 const PP_UI = {
     isOpen: false,
+    dragSrc: null,
 
     async init() {
         if (document.getElementById('pp-toggle-btn')) return;
         
         const prefs = await PP_Store.getPreferences();
 
-        // 1. Create Toggle Button
+        // 1. Toggle Button (FIXED ICON)
         const toggleBtn = document.createElement('div');
         toggleBtn.id = 'pp-toggle-btn';
-        toggleBtn.textContent = '📂'; 
+        toggleBtn.textContent = '⚡';  // Replaced broken char with Lightning Bolt
         if (prefs.buttonTop) toggleBtn.style.top = prefs.buttonTop;
         
         this.makeDraggable(toggleBtn);
@@ -90,23 +157,31 @@ const PP_UI = {
         };
         document.body.appendChild(toggleBtn);
 
-        // 2. Create Sidebar
+        // 2. Sidebar
         const sidebar = document.createElement('div');
         sidebar.id = 'pp-sidebar';
-        
         if (prefs.sidebarWidth) sidebar.style.width = `${prefs.sidebarWidth}px`;
 
+        // FIXED ICONS IN HTML BELOW
         sidebar.innerHTML = `
             <div id="pp-resizer"></div> 
             <div class="pp-header">
-                <h3>Project Drawings</h3>
+                <h3>Procore Power-Up</h3>
                 <span class="pp-close-btn" id="pp-close">&times;</span>
             </div>
-            <div class="pp-controls">
-                <button id="pp-load-all" class="pp-btn-primary">🔄 Load All Data</button>
+            
+            <div class="pp-section-title">
+                <span>⭐ Favorites</span>
+                <button id="pp-new-folder" class="pp-icon-btn" title="New Folder">+</button>
             </div>
+            <div id="pp-favorites-list" class="pp-fav-container"></div>
+
+            <div class="pp-controls">
+                <button id="pp-load-all" class="pp-btn-primary">🔄 Scan Project Data</button>
+            </div>
+            
             <div class="pp-search-box">
-                <input type="text" id="pp-search" placeholder="Filter drawings...">
+                <input type="text" id="pp-search" placeholder="Filter all drawings...">
             </div>
             <div id="pp-tree-content" class="pp-content"></div>
             <div class="pp-footer" id="pp-footer"></div>
@@ -115,11 +190,104 @@ const PP_UI = {
 
         this.makeResizable(document.getElementById('pp-resizer'), sidebar);
 
+        // Events
         document.getElementById('pp-close').onclick = () => PP_Core.toggleSidebar();
         document.getElementById('pp-search').addEventListener('input', PP_UI.filterTree);
         document.getElementById('pp-load-all').addEventListener('click', PP_Core.triggerLoadAll);
+        
+        document.getElementById('pp-new-folder').onclick = () => {
+            const name = prompt("Enter folder name:");
+            if(name) PP_Favorites.addFolder(name);
+        };
     },
 
+    // --- FAVORITES RENDERING ---
+    renderFavorites() {
+        const container = document.getElementById('pp-favorites-list');
+        container.innerHTML = '';
+
+        if (PP_Favorites.folders.length === 0) {
+            container.innerHTML = `<div class="pp-fav-empty">Create folders to organize drawings. Drag & Drop from the list below!</div>`;
+            return;
+        }
+
+        PP_Favorites.folders.forEach(folder => {
+            const folderEl = document.createElement('details');
+            folderEl.className = 'pp-fav-folder';
+            folderEl.open = true; // Default open for ease
+
+            // Drag Drop Targets
+            folderEl.ondragover = (e) => {
+                e.preventDefault();
+                folderEl.classList.add('drag-over');
+            };
+            folderEl.ondragleave = () => folderEl.classList.remove('drag-over');
+            folderEl.ondrop = (e) => {
+                e.preventDefault();
+                folderEl.classList.remove('drag-over');
+                const num = e.dataTransfer.getData("text/plain");
+                
+                if (num) {
+                    const added = PP_Favorites.addDrawingToFolder(folder.id, num);
+                    
+                    // --- ANIMATION TRIGGER START ---
+                    if (added !== false) { // Only animate if it actually worked
+                        folderEl.classList.add('pp-gulp');
+                        setTimeout(() => folderEl.classList.remove('pp-gulp'), 500);
+                    }
+                    // --- ANIMATION TRIGGER END ---
+                }
+            };
+
+            // Summary (Header)
+            const summary = document.createElement('summary');
+            summary.innerHTML = `<span class="pp-folder-name">${folder.name}</span>`;
+            
+            const delBtn = document.createElement('span');
+            delBtn.className = 'pp-del-folder';
+            delBtn.innerHTML = '&times;';
+            delBtn.title = "Delete Folder";
+            delBtn.onclick = (e) => {
+                e.preventDefault(); 
+                PP_Favorites.removeFolder(folder.id);
+            };
+            summary.appendChild(delBtn);
+            folderEl.appendChild(summary);
+
+            // List
+            const list = document.createElement('ul');
+            folder.drawings.forEach(num => {
+                // We recreate the row, but need to look up the Full Data to get the ID/Title
+                const fullData = PP_Core.getDrawingByNum(num);
+                const li = document.createElement('li');
+                li.className = 'pp-fav-item';
+
+                if (fullData) {
+                    const a = document.createElement('a');
+                    a.href = PP_Core.getDrawingUrl(fullData.id);
+                    a.target = "_blank";
+                    a.textContent = `${num} - ${fullData.title}`;
+                    li.appendChild(a);
+                } else {
+                    li.innerHTML = `<span class="pp-missing">${num} (Need Scan)</span>`;
+                }
+
+                // Remove item button
+                const removeSpan = document.createElement('span');
+                removeSpan.className = 'pp-del-item';
+                removeSpan.innerHTML = '&times;';
+                removeSpan.onclick = () => PP_Favorites.removeDrawing(folder.id, num);
+                li.appendChild(removeSpan);
+
+                list.appendChild(li);
+            });
+
+            folderEl.appendChild(list);
+            container.appendChild(folderEl);
+        });
+    },
+
+    // --- MAIN TREE RENDERING ---
     updateLoadButton(text, disabled) {
         const btn = document.getElementById('pp-load-all');
         if (btn) {
@@ -131,7 +299,6 @@ const PP_UI = {
     makeDraggable(element) {
         let isDragging = false;
         let startY, startTop;
-
         element.addEventListener('mousedown', (e) => {
             isDragging = true;
             startY = e.clientY;
@@ -140,14 +307,12 @@ const PP_UI = {
             element.style.transition = 'none';
             e.preventDefault();
         });
-
         window.addEventListener('mousemove', (e) => {
             if (!isDragging) return;
             const deltaY = e.clientY - startY;
             if (Math.abs(deltaY) > 3) element.setAttribute('data-dragged', 'true');
             element.style.top = `${startTop + deltaY}px`;
         });
-
         window.addEventListener('mouseup', () => {
             if (isDragging) {
                 isDragging = false;
@@ -160,7 +325,6 @@ const PP_UI = {
     makeResizable(resizer, sidebar) {
         let isResizing = false;
         let startX, startWidth;
-
         resizer.addEventListener('mousedown', (e) => {
             isResizing = true;
             startX = e.clientX;
@@ -169,16 +333,12 @@ const PP_UI = {
             document.body.style.cursor = 'ew-resize';
             e.preventDefault();
         });
-
         window.addEventListener('mousemove', (e) => {
             if (!isResizing) return;
             const deltaX = startX - e.clientX; 
             const newWidth = startWidth + deltaX;
-            if (newWidth > 200 && newWidth < 800) {
-                sidebar.style.width = `${newWidth}px`;
-            }
+            if (newWidth > 200 && newWidth < 800) sidebar.style.width = `${newWidth}px`;
         });
-
         window.addEventListener('mouseup', () => {
             if (isResizing) {
                 isResizing = false;
@@ -201,10 +361,15 @@ const PP_UI = {
         if (stateType === 'LOADING') {
             treeRoot.innerHTML = `<div class="pp-empty-state"><p>Loading...</p></div>`;
         } else if (stateType === 'EMPTY') {
-            treeRoot.innerHTML = `<div class="pp-empty-state"><p><strong>No drawings found.</strong></p><p>Please <b>Refresh the Page</b> to capture discipline names, then click "Load All Data".</p></div>`;
+            treeRoot.innerHTML = `<div class="pp-empty-state"><p><strong>No drawings found.</strong></p><p>Please <b>Refresh the Page</b> to capture discipline names, then click "Scan Project Data".</p></div>`;
             footer.innerText = "";
         } else if (stateType === 'DATA') {
+            // Save global reference for lookups
+            PP_Core.cachedDrawings = payload.drawings; 
+            PP_Core.cachedAreaId = payload.drawingAreaId;
+
             PP_UI.buildTree(payload.drawings, payload.map, payload.projectId, payload.drawingAreaId);
+            PP_UI.renderFavorites(); // Re-render favorites to resolve links
             const dateStr = new Date(payload.timestamp).toLocaleString();
             footer.innerText = `Last updated: ${dateStr}`;
         }
@@ -215,7 +380,6 @@ const PP_UI = {
         treeRoot.innerHTML = ''; 
 
         const validDrawings = drawings.filter(d => d.number || d.drawing_number || d.num);
-        
         if (validDrawings.length === 0) {
             treeRoot.innerHTML = '<div class="pp-empty-state"><p>No valid drawings found.</p></div>';
             return;
@@ -253,8 +417,6 @@ const PP_UI = {
             const orderA = groups[a].order;
             const orderB = groups[b].order;
             if (orderA !== 9999 && orderB !== 9999) return orderA - orderB;
-            if (orderA !== 9999) return -1;
-            if (orderB !== 9999) return 1;
             return a.localeCompare(b);
         });
 
@@ -266,7 +428,6 @@ const PP_UI = {
             const colorClass = PP_UI.getDisciplineColor(discipline);
             
             const summary = document.createElement('summary');
-            
             const tagSpan = document.createElement('span');
             tagSpan.className = `pp-disc-tag ${colorClass}`;
             tagSpan.textContent = discipline.charAt(0);
@@ -290,12 +451,17 @@ const PP_UI = {
     createDrawingRow(dwg, projectId, areaId) {
         const li = document.createElement('li');
         li.className = 'pp-drawing-row';
+        
+        // DRAG AND DROP ATTRIBUTES
+        li.draggable = true;
+        li.ondragstart = (e) => {
+            e.dataTransfer.setData("text/plain", dwg.num);
+            e.dataTransfer.effectAllowed = "copy";
+        };
 
         if (!projectId || !areaId) {
             const errSpan = document.createElement('span');
             errSpan.className = 'pp-error-msg';
-            errSpan.style.color = '#999';
-            errSpan.style.fontSize = '11px';
             errSpan.textContent = `${dwg.num} (Context Missing)`;
             li.appendChild(errSpan);
             return li;
@@ -355,7 +521,6 @@ const PP_UI = {
         sections.forEach(section => {
             let hasMatch = false;
             const rows = section.querySelectorAll('.pp-drawing-row');
-
             rows.forEach(row => {
                 const text = row.textContent.toLowerCase();
                 if (text.includes(term)) {
@@ -365,7 +530,6 @@ const PP_UI = {
                     row.style.display = 'none'; 
                 }
             });
-
             if (hasMatch) {
                 section.style.display = '';
                 section.open = true; 
@@ -385,6 +549,8 @@ const PP_Core = {
     dataBuffer: [],
     debounceTimer: null,
     isScanning: false,
+    cachedDrawings: [], // Helper for Favorites Lookup
+    cachedAreaId: null,
 
     init() {
         PP_UI.init();
@@ -392,6 +558,9 @@ const PP_Core = {
         this.currentProjectId = ids.projectId;
 
         if (this.currentProjectId) {
+            // Load Favorites Init
+            PP_Favorites.init(this.currentProjectId);
+
             PP_Store.getProjectData(this.currentProjectId).then(res => {
                 this.currentMap = res.map;
                 if (res.data && res.data.drawings) {
@@ -412,12 +581,29 @@ const PP_Core = {
         return { companyId: c?c[1]:null, projectId: p?p[1]:null, drawingAreaId: a?a[1]:null };
     },
 
+    // Helper for Favorites to resolve current ID
+    getDrawingByNum(num) {
+        if (!this.cachedDrawings) return null;
+        return this.cachedDrawings.find(d => 
+            (d.number === num) || (d.drawing_number === num) || (d.num === num)
+        );
+    },
+
+    getDrawingUrl(drawingId) {
+        const ids = this.getIdsFromUrl();
+        const pid = ids.projectId || this.currentProjectId;
+        const aid = ids.drawingAreaId || this.cachedAreaId;
+        if(!pid || !aid) return "#";
+        return `https://app.procore.com/${pid}/project/drawing_areas/${aid}/drawing_log/view_fullscreen/${drawingId}`;
+    },
+
     async handleWiretapMessage(event) {
+        // SECURITY UPDATE: Check origin
+        if (event.origin !== window.location.origin) return;
         if (event.source !== window || event.data.type !== 'PP_DATA') return;
         
         const rawData = event.data.payload;
         const ids = event.data.ids || {};
-        
         const activeProjectId = PP_Core.getIdsFromUrl().projectId || ids.projectId;
         if (!activeProjectId) return;
 
@@ -429,16 +615,10 @@ const PP_Core = {
         }
 
         const foundDrawings = PP_Core.findDrawingsInObject(rawData);
-        
         if (foundDrawings.length > 0) {
             PP_Core.dataBuffer.push(...foundDrawings);
-            
-            if (PP_Core.isScanning) {
-                PP_UI.updateLoadButton(`Scanning... (${PP_Core.dataBuffer.length} pending)`, true);
-            }
-
+            if (PP_Core.isScanning) PP_UI.updateLoadButton(`Scanning... (${PP_Core.dataBuffer.length} pending)`, true);
             if (PP_Core.debounceTimer) clearTimeout(PP_Core.debounceTimer);
-            
             PP_Core.debounceTimer = setTimeout(() => {
                 PP_Core.flushBuffer(activeProjectId, ids);
             }, 1500);
@@ -447,7 +627,6 @@ const PP_Core = {
 
     async flushBuffer(activeProjectId, ids) {
         if (PP_Core.dataBuffer.length === 0) return;
-
         PP_UI.updateLoadButton("Processing...", true);
 
         const currentCache = await PP_Store.getProjectData(activeProjectId);
@@ -469,23 +648,30 @@ const PP_Core = {
         if (newItems.length > 0) {
             merged = [...merged, ...newItems];
             const areaIdToSave = ids.drawingAreaId || (currentCache.data ? currentCache.data.drawingAreaId : null);
-            
             const saved = await PP_Store.saveProjectData(activeProjectId, merged, ids.companyId, areaIdToSave);
             PP_UI.renderState('DATA', { ...saved, map: PP_Core.currentMap, projectId: activeProjectId });
         }
 
         PP_UI.updateLoadButton("Done!", false);
-        setTimeout(() => PP_UI.updateLoadButton("🔄 Load All Data", false), 3000);
+        
+        // --- ANIMATION TRIGGER START ---
+        const btn = document.getElementById('pp-load-all');
+        if (btn) {
+            btn.classList.add('pp-pop');
+            // Remove class after animation plays so it can play again next time
+            setTimeout(() => btn.classList.remove('pp-pop'), 500);
+        }
+        // --- ANIMATION TRIGGER END ---
+        
+        setTimeout(() => PP_UI.updateLoadButton("🔄 Scan Project Data", false), 3000); // FIXED ICON
         PP_Core.isScanning = false;
     },
 
     findDisciplinesRecursive(obj, map, sortCounter) {
         if (!obj || typeof obj !== 'object') return;
-        
         if (obj.id && obj.name && typeof obj.name === 'string' && !obj.drawing_number && !obj.number) {
             map[obj.id] = { name: obj.name, index: sortCounter };
         }
-
         if (Array.isArray(obj)) {
             obj.forEach((item, index) => {
                 PP_Core.findDisciplinesRecursive(item, map, index); 
@@ -521,111 +707,70 @@ const PP_Core = {
         PP_UI.toggle(!PP_UI.isOpen);
     },
 
-    // ----------------------------------------------------------------------
-    // NEW HELPER: Robust Scroll Container Finder
-    // ----------------------------------------------------------------------
-    findScrollContainer(startNode) {
-        // 1. BEST TARGET: AG Grid Body Viewport (Standard Procore Grid)
+    findScrollContainer() {
         const agBody = document.querySelector('.ag-body-viewport');
-        if (agBody) {
-            console.log("PP: Found AG Grid viewport");
-            return agBody;
-        }
+        if (agBody && agBody.scrollHeight > agBody.clientHeight) return agBody;
 
-        // 2. Fallback: Largest scrollable div on screen
         const allDivs = document.querySelectorAll('div');
         let largestDiv = null;
         let maxScroll = 0;
 
         allDivs.forEach(div => {
-            if (div.scrollHeight > div.clientHeight + 100) { 
-                const style = window.getComputedStyle(div);
-                if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
-                    if (div.scrollHeight > maxScroll) {
-                        maxScroll = div.scrollHeight;
-                        largestDiv = div;
-                    }
+            const style = window.getComputedStyle(div);
+            if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && div.scrollHeight > div.clientHeight) {
+                if (div.scrollHeight > maxScroll) {
+                    maxScroll = div.scrollHeight;
+                    largestDiv = div;
                 }
             }
         });
-
-        if (largestDiv) {
-            console.log("PP: Using largest scroll container:", largestDiv);
-            return largestDiv;
-        }
-        
-        // 3. Last Resort: Window
-        return window;
+        return largestDiv || window;
     },
 
-    // ----------------------------------------------------------------------
-    // UPDATED LOAD FUNCTION
-    // ----------------------------------------------------------------------
     async triggerLoadAll() {
         const currentUrl = window.location.href;
         const isDrawingPage = currentUrl.includes('/drawing_log') || currentUrl.includes('/drawings');
         
         if (!isDrawingPage) {
-            if (PP_Core.currentProjectId && PP_Core.currentMap) { 
+            if (PP_Core.currentProjectId) { 
                 const ids = PP_Core.getIdsFromUrl();
                 const targetUrl = `https://app.procore.com/${ids.projectId}/project/drawing_log`;
-                if (confirm("You are not on the Drawings page. Redirect there now?")) {
+                if (confirm("You are not on the Drawings page.\n\nClick OK to go there now so we can scan.")) {
                     window.location.href = targetUrl;
                 }
             } else {
-                alert("Please navigate to the Project Drawings tool to load data.");
+                alert("Please go to the Project Drawings page first.");
             }
             return;
         }
 
         const expandAllBtn = document.querySelector('.expand-button'); 
-        
         PP_Core.isScanning = true;
-        PP_UI.updateLoadButton("🚀 Initializing Scan...", true);
+        PP_UI.updateLoadButton("⏳ Initializing Scan...", true); // FIXED ICON
         
-        // --- STEP 1: FORCE RESET (THE FIX) ---
-        // We do NOT trust the current state. "Close All" might mean only 1 folder is open.
-        // We must Collapse everything first, then Open everything.
         if (expandAllBtn) {
             const ariaLabel = expandAllBtn.getAttribute('aria-label') || "";
-            // If it says "Close", it means *some* or *all* are open. 
-            // If it says "Expand", it means all are closed.
-            
-            const isPartiallyOrFullyExpanded = ariaLabel.toLowerCase().includes('close');
-
-            if (isPartiallyOrFullyExpanded) {
+            if (ariaLabel.toLowerCase().includes('close')) {
                 PP_UI.updateLoadButton("Resetting View...", true);
-                expandAllBtn.click(); // Click to Collapse All
-                await new Promise(r => setTimeout(r, 1000)); // Wait for render
-                
-                expandAllBtn.click(); // Click to Expand All
-                await new Promise(r => setTimeout(r, 1000)); // Wait for render
+                expandAllBtn.click(); // Collapse
+                await new Promise(r => setTimeout(r, 800)); 
+                expandAllBtn.click(); // Expand
+                await new Promise(r => setTimeout(r, 800)); 
             } else {
-                // It says "Expand", so all are closed. Just click once.
                 expandAllBtn.click();
-                await new Promise(r => setTimeout(r, 1000));
+                await new Promise(r => setTimeout(r, 800));
             }
         }
 
-        // --- STEP 2: LOCATE THE SCROLL JAIL ---
-        const scrollTarget = PP_Core.findScrollContainer(expandAllBtn || document.querySelector('.drawing-row'));
-        
-        if (!scrollTarget || scrollTarget === window) {
-            console.warn("PP: Could not locate specific scroll container. Defaulting to window.");
-        }
-
-        // --- STEP 3: TURBO SCROLL (With Patience) ---
+        const scrollTarget = PP_Core.findScrollContainer();
         let currentScroll = 0;
-        const scrollStep = 2500; 
+        const scrollStep = 1500; 
         let patience = 0; 
         let lastHeight = 0;
 
         const scroller = setInterval(() => {
-            if (scrollTarget === window) {
-                window.scrollTo(0, currentScroll);
-            } else {
-                scrollTarget.scrollTop = currentScroll;
-            }
+            if (scrollTarget === window) window.scrollTo(0, currentScroll);
+            else scrollTarget.scrollTop = currentScroll;
 
             currentScroll += scrollStep;
             
@@ -644,19 +789,16 @@ const PP_Core = {
                     patience++;
                 }
 
-                if (patience >= 3) {
+                if (patience >= 4) {
                     clearInterval(scroller);
-                    
                     if (scrollTarget === window) window.scrollTo(0, 0);
                     else scrollTarget.scrollTop = 0;
-
                     PP_UI.updateLoadButton("Processing Final Data...", true);
                 }
             }
-        }, 600); 
+        }, 400); 
     }
 };
 
-// Initialize
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => PP_Core.init());
 else PP_Core.init();
