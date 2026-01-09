@@ -244,14 +244,25 @@ const PP_UI = {
         document.getElementById('pp-close').onclick = () => PP_Core.toggleSidebar();
         const searchInput = document.getElementById('pp-search');
         
-        // Search & Keyboard Nav
-        searchInput.addEventListener('input', PP_UI.filterTree);
+        // --- OPTIMIZATION 1: DEBOUNCED SEARCH ---
+        // Instead of running on every keystroke, wait until user stops typing
+        searchInput.addEventListener('input', PP_Core.debounce(() => {
+            PP_UI.filterTree();
+        }, 300));
+
+        // Keyboard Nav
         searchInput.addEventListener('keydown', (e) => {
             if (e.key === 'ArrowDown') {
                 e.preventDefault();
-                // Focus the very first visible row in the document
-                const firstRow = document.querySelector('.pp-drawing-row:not([style*="display: none"])');
-                if (firstRow) firstRow.focus();
+                // Scope ONLY to #pp-tree-content
+                const allVisible = Array.from(document.querySelectorAll('#pp-tree-content .pp-drawing-row'))
+                    .filter(el => el.offsetParent !== null);
+                
+                const first = allVisible.find(row => !row.classList.contains('squeeze-out'));
+                if (first) first.focus();
+
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
             }
         });
 
@@ -301,7 +312,6 @@ const PP_UI = {
         container.innerHTML = '';
 
         if (PP_Favorites.folders.length === 0) {
-            // Clean empty state (Removed bulky text)
             container.innerHTML = `<div class="pp-fav-empty">No folders yet.</div>`;
             return;
         }
@@ -588,9 +598,10 @@ const PP_UI = {
                 li.querySelector('a').click();
             } else if (e.key === 'ArrowDown') {
                 e.preventDefault();
-                // Find ALL currently visible rows across all sections
-                const allVisible = Array.from(document.querySelectorAll('.pp-drawing-row'))
-                    .filter(el => el.offsetParent !== null); // Standard check for visibility
+                
+                // Scope ONLY to #pp-tree-content
+                const allVisible = Array.from(document.querySelectorAll('#pp-tree-content .pp-drawing-row'))
+                    .filter(el => el.offsetParent !== null);
                 const idx = allVisible.indexOf(li);
                 
                 if (idx > -1 && idx < allVisible.length - 1) {
@@ -598,14 +609,16 @@ const PP_UI = {
                 }
             } else if (e.key === 'ArrowUp') {
                 e.preventDefault();
-                // Find ALL currently visible rows
-                const allVisible = Array.from(document.querySelectorAll('.pp-drawing-row'))
+                
+                // Scope ONLY to #pp-tree-content
+                const allVisible = Array.from(document.querySelectorAll('#pp-tree-content .pp-drawing-row'))
                     .filter(el => el.offsetParent !== null);
                 const idx = allVisible.indexOf(li);
 
                 if (idx > 0) {
                     allVisible[idx - 1].focus();
-                } else {
+                } else if (idx === 0) {
+                    // Only jump back to search if we are at the very top of the MAIN TREE
                     document.getElementById('pp-search').focus();
                 }
             }
@@ -784,6 +797,16 @@ const PP_Core = {
         window.addEventListener("message", PP_Core.handleWiretapMessage);
     },
 
+    // --- UTILITY: DEBOUNCE ---
+    debounce(func, wait) {
+        let timeout;
+        return function(...args) {
+            const context = this;
+            clearTimeout(timeout);
+            timeout = setTimeout(() => func.apply(context, args), wait);
+        };
+    },
+
     getIdsFromUrl() {
         const url = window.location.href;
         const p = url.match(/projects\/(\d+)/) || url.match(/\/(\d+)\/project/);
@@ -928,24 +951,17 @@ const PP_Core = {
         PP_UI.toggle(!PP_UI.isOpen);
     },
 
+    // --- OPTIMIZATION 2: SAFE SCROLL FINDER ---
+    // Avoids scanning every DIV in the document (Layout Thrashing risk)
     findScrollContainer() {
-        const agBody = document.querySelector('.ag-body-viewport');
-        if (agBody && agBody.scrollHeight > agBody.clientHeight) return agBody;
-
-        const allDivs = document.querySelectorAll('div');
-        let largestDiv = null;
-        let maxScroll = 0;
-
-        allDivs.forEach(div => {
-            const style = window.getComputedStyle(div);
-            if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && div.scrollHeight > div.clientHeight) {
-                if (div.scrollHeight > maxScroll) {
-                    maxScroll = div.scrollHeight;
-                    largestDiv = div;
-                }
-            }
-        });
-        return largestDiv || window;
+        // 1. Try known Procore containers first
+        const candidates = ['.ag-body-viewport', '.main-content', '#main_content', 'body'];
+        for (const sel of candidates) {
+            const el = document.querySelector(sel);
+            if (el && el.scrollHeight > el.clientHeight + 100) return el;
+        }
+        // 2. Fallback: Default to window (Safe)
+        return window;
     },
 
     async triggerLoadAll() {
